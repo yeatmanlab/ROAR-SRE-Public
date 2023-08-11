@@ -1,0 +1,457 @@
+---
+title: "ROAR-SRE-TOSREC-Analysis"
+author: "Jasmine Tran"
+date:  "`r Sys.Date()`"
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 4
+    theme: cosmo
+    highlight: tango
+---
+
+# Load Packages
+
+Let's first load the packages that we need for this chapter.
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+library(knitr)
+library(stringr)
+library(ggpubr)
+library(mirt)
+library(kableExtra)
+library(tidyverse)
+library(purrr)
+library(plyr)
+library(ggplot2)
+library(viridis)
+library(ggsci)
+library(wesanderson)
+library(dplyr)
+library(plotrix)
+opts_knit$set(root.dir = "~/Documents/Code/ROAR_organizer/ROAR-Score/")
+```
+
+## Settings
+```{r echo = FALSE}
+# sets how code looks in knitted document
+opts_chunk$set(comment = "")
+# suppresses warning about grouping 
+options(dplyr.summarise.inform = F)
+```
+
+## Functions
+```{r}
+correlate_rows <- function(x, y) {
+  cor(x, y)
+}
+```
+
+# Data 
+
+## Data Loading (jsPsych Raw Trials)
+```{r}
+df.raw <- read.csv("~/Documents/roar-analysis/data/sre_raw_trials_jspsych_07-12-2023.csv")
+```
+
+## Data Cleaning & Wrangling
+```{r}
+df.cleaned <- df.raw %>% 
+  filter(studyId == "school-default", 
+         task == "test_response", 
+         completed == "True") %>% 
+  mutate(correct = as.numeric(correct),
+         gradeResponse = str_extract(userInfo, "(?<=grade': ').*?(?='\\})"))
+```
+
+```{r}
+df.not.guessing <- df.cleaned %>%
+  group_by(pid, runId) %>%
+  dplyr::summarise(medianRT = median(rt)) %>%
+  filter(medianRT > 500) %>%
+  mutate(keep = 1)
+```
+
+```{r}
+df.keep <- df.cleaned %>%
+  left_join(df.not.guessing, by=c("pid", "runId")) %>%
+  filter(keep == 1) %>%
+  select(-keep)
+```
+
+```{r}
+df.tosrec.keep <- df.keep %>%
+  filter(blockId == "tosrec",
+         trialNumBlock == 1) %>%
+  mutate(keep = 1) %>%
+  select(pid, runId, gradeResponse, keep)
+```
+
+```{r}
+df.ai.keep <- df.keep %>%
+  filter(blockId == "ai",
+         trialNumBlock == 1) %>%
+  mutate(keep = 1) %>%
+  select(pid, runId, gradeResponse, keep)
+```
+
+```{r}
+df.keep.v2 <- df.keep %>%
+  left_join(df.tosrec.keep, by=c("pid", "gradeResponse", "runId")) %>%
+  filter(keep == 1)
+```
+
+```{r}
+df.keep.v3 <- df.keep %>%
+  left_join(df.ai.keep, by=c("pid", "gradeResponse", "runId")) %>%
+  filter(keep == 1)
+```
+
+```{r}
+df.keep.v3 <- df.keep %>%
+  left_join(df.ai.keep, by=c("pid", "gradeResponse", "runId")) %>%
+  filter(keep == 1)
+```
+
+```{r}
+df.analysis <- rbind(df.keep.v2, df.keep.v3)
+```
+
+```{r}
+df.init.time <- df.analysis %>% 
+  filter(trialNumBlock == 1) %>% 
+  select(pid, runId, corpusId, time_elapsed) %>% 
+  dplyr :: rename(init_time = time_elapsed) 
+```
+
+```{r}
+df.block.time <- df.analysis %>% 
+  select(pid, runId, gradeResponse, corpusId, blockId, itemId, correct, rt,  time_elapsed) %>% 
+  left_join(df.init.time, by = c("pid", "runId", "corpusId")) %>% 
+  mutate(minus_time = time_elapsed - init_time) %>% 
+  mutate(part = as.numeric(case_when(
+    minus_time <= 90000 ~ 90,
+    minus_time > 90000 & minus_time < 120000 ~ 120,
+    minus_time >= 120000 ~ 180))) %>% # Default case if none of the above conditions are met
+  filter(!is.na(pid), pid != "") %>%
+  mutate(correct_new = ifelse(correct == 0, -1, 1))
+```
+
+## Creating Reference Data Frame to Set Intervals for Block Timing 
+```{r}
+list <- seq(0, 180000, by = 10000)
+
+intervals.ref <- data.frame(tibble(interval = list))
+full.int.df <- df.block.time %>%
+  dplyr::rename(seconds_elapsed = minus_time) %>%
+  group_by(pid, runId, blockId, seconds_elapsed) %>%
+  tally() %>% 
+  select(-n) %>%
+  merge(intervals.ref, all = TRUE)
+```
+
+## Creating a Grade Data Frame to Reference Later On
+```{r}
+df.grade <- df.block.time %>%
+  select(pid, runId, gradeResponse) %>%
+  unique()
+```
+
+## Augmenting Data for Lab Block into 10 Second Intervals
+```{r}
+df.lab.int <- df.block.time %>%
+  select(pid, runId, gradeResponse, blockId, correct, correct_new, minus_time) %>%
+  filter(blockId == "lab") %>%
+  group_by(pid, runId, blockId) %>%
+  dplyr::arrange(minus_time, .by_group = T) %>%
+  reframe(seconds_elapsed = minus_time,
+         labScore = cumsum(correct_new))
+```
+
+```{r}
+df.lab.int.v1 <- df.lab.int %>%
+  right_join(full.int.df, by=c("pid", "runId", "blockId", "seconds_elapsed")) %>%
+  mutate(diff = interval - seconds_elapsed) %>%
+  filter(diff >= 0, blockId == "lab") %>%
+  group_by(pid, runId, interval) %>% 
+  slice_min(diff) %>%
+  dplyr::rename("labSecondsElapsed" = seconds_elapsed) %>%
+  ungroup()
+```
+
+```{r}
+df.lab.180.score <- df.lab.int.v1 %>%
+  filter(interval == 180000) %>%
+  select(pid, runId, "labScore180" = labScore)
+```
+
+```{r}
+df.lab.int.final <- df.lab.int.v1 %>%
+  left_join(df.lab.180.score, by=c("pid", "runId")) %>%
+  left_join(df.grade, by=c("pid", "runId")) %>%
+  dplyr::rename("grade" = gradeResponse)
+```
+
+```{r}
+df.lab.int.final
+```
+
+## Augmenting Data for TOSREC Block into 10 Second Intervals
+```{r}
+df.tosrec.int <- df.block.time %>%
+  select(pid, runId, gradeResponse, blockId, correct, correct_new, minus_time) %>%
+  filter(blockId == "tosrec") %>%
+  group_by(pid, runId, blockId) %>%
+  dplyr::arrange(minus_time, .by_group = T) %>%
+  reframe(seconds_elapsed = minus_time,
+         tosrecScore = cumsum(correct_new))
+```
+
+```{r}
+df.tosrec.int.v1 <- df.tosrec.int %>%
+  right_join(full.int.df, by=c("pid", "runId", "blockId", "seconds_elapsed")) %>%
+  mutate(diff = interval - seconds_elapsed) %>%
+  filter(diff >= 0, blockId == "tosrec") %>%
+  group_by(pid, runId, interval) %>% 
+  slice_min(diff) %>%
+  dplyr::rename("tosrecSecondsElapsed" = seconds_elapsed) %>%
+  ungroup()
+```
+
+```{r}
+df.tosrec.180.score <- df.tosrec.int.v1 %>%
+  filter(interval == 180000) %>%
+  select(pid, runId, "tosrecScore180" = tosrecScore)
+```
+
+```{r}
+df.tosrec.int.final <- df.tosrec.int.v1 %>%
+  left_join(df.tosrec.180.score, by=c("pid", "runId")) %>%
+  left_join(df.grade, by=c("pid", "runId")) %>%
+  dplyr::rename("grade" = gradeResponse)
+```
+
+```{r}
+df.tosrec.int.final
+```
+
+## Augmenting Data for Lab Block into 10 Second Intervals
+```{r}
+df.ai.int <- df.block.time %>%
+  select(pid, runId, gradeResponse, blockId, correct, correct_new, minus_time) %>%
+  filter(blockId == "ai") %>%
+  group_by(pid, runId, blockId) %>%
+  dplyr::arrange(minus_time, .by_group = T) %>%
+  reframe(seconds_elapsed = minus_time,
+         aiScore = cumsum(correct_new))
+```
+
+```{r}
+df.ai.int.v1 <- df.ai.int %>%
+  right_join(full.int.df, by=c("pid", "runId", "blockId", "seconds_elapsed")) %>%
+  mutate(diff = interval - seconds_elapsed) %>%
+  filter(diff >= 0, blockId == "ai") %>%
+  group_by(pid, runId, interval) %>% 
+  slice_min(diff) %>%
+  dplyr::rename("aiSecondsElapsed" = seconds_elapsed) %>%
+  ungroup()
+```
+
+```{r}
+df.ai.180.score <- df.ai.int.v1 %>%
+  filter(interval == 180000) %>%
+  select(pid, runId, "aiScore180" = aiScore)
+```
+
+```{r}
+df.ai.int.final <- df.ai.int.v1 %>%
+  left_join(df.ai.180.score, by=c("pid", "runId")) %>%
+  left_join(df.grade, by=c("pid", "runId")) %>%
+  dplyr::rename("grade" = gradeResponse)
+```
+
+```{r}
+df.ai.int.final
+```
+
+## Combining Lab & TOSREC Data Frame for Analysis
+```{r}
+df.lab.tosrec.int <- df.lab.int.final %>%
+  merge(df.tosrec.int.final, by=c("pid", "runId", "interval")) %>%
+  select(pid, runId, labScore, labScore180, tosrecScore, tosrecScore180,
+         labSecondsElapsed, tosrecSecondsElapsed, interval) %>%
+  group_by(interval) %>%
+  reframe(equalCorr = cor(labScore, tosrecScore),
+          oneThreeCorr = cor(labScore, tosrecScore180),
+          n = n(), 
+          standardError = sqrt((1 - oneThreeCorr^2) / (n - 2)),
+          errorBarsMax = oneThreeCorr + standardError,
+          errorBarsMin = oneThreeCorr - standardError) 
+```
+
+## Combining Lab & AI Data Frame for Analysis
+```{r}
+df.lab.ai.int <- df.lab.int.final %>%
+  merge(df.ai.int.final, by=c("pid", "runId", "interval")) %>%
+  select(pid, runId, labScore, labScore180, aiScore, aiScore180,
+         labSecondsElapsed, aiSecondsElapsed, interval) %>%
+  group_by(interval) %>%
+  reframe(equalCorr = cor(labScore, aiScore),
+          oneThreeCorr = cor(labScore180, aiScore),
+          n = n(), 
+          standardError = sqrt((1 - oneThreeCorr^2) / (n - 2)),
+          errorBarsMax = oneThreeCorr + standardError,
+          errorBarsMin = oneThreeCorr - standardError)
+```
+
+## Checking Students in Each Grade for Lab-TOSREC Sample
+```{r}
+df.lab.tosrec.demo <- df.lab.int.final %>%
+  merge(df.tosrec.int.final, by=c("pid", "runId", "interval", "grade")) %>%
+  select(pid, runId, grade) %>%
+  unique() %>%
+  group_by(grade) %>%
+  tally()
+```
+
+## Combining Lab & TOSREC Data Frame Along with Grade Response for Analysis
+```{r}
+df.lab.tosrec.grade <- df.lab.int.final %>%
+  merge(df.tosrec.int.final, by=c("pid", "runId", "interval", "grade")) %>%
+  select(pid, runId, grade, labScore, labScore180, tosrecScore, tosrecScore180,
+         labSecondsElapsed, tosrecSecondsElapsed, interval) %>%
+  group_by(interval, grade) %>%
+  reframe(equalCorr = cor(labScore, tosrecScore),
+          oneThreeCorr = cor(labScore, tosrecScore180),
+          n = n(), 
+          standardError = sqrt((1 - oneThreeCorr^2) / (n - 2)),
+          errorBarsMax = oneThreeCorr + standardError,
+          errorBarsMin = oneThreeCorr - standardError) 
+```
+
+## Checking Students in Each Grade for Lab-TOSREC Sample
+```{r}
+df.lab.ai.demo <- df.lab.int.final %>%
+  merge(df.ai.int.final, by=c("pid", "runId", "interval", "grade")) %>%
+  select(pid, runId, grade) %>%
+  unique() %>%
+  group_by(grade) %>%
+  tally()
+```
+
+## Combining Lab & AI Data Frame Along with Grade Response for Analysis
+```{r}
+df.lab.ai.grade <- df.lab.int.final %>%
+  merge(df.ai.int.final, by=c("pid", "runId", "interval", "grade")) %>%
+  select(pid, runId, grade, labScore, labScore180, aiScore, aiScore180,
+         labSecondsElapsed, aiSecondsElapsed, interval) %>%
+  group_by(interval, grade) %>%
+  reframe(equalCorr = cor(labScore, aiScore),
+          oneThreeCorr = cor(labScore180, aiScore),
+          n = n(), 
+          standardError = sqrt((1 - oneThreeCorr^2) / (n - 2)),
+          errorBarsMax = oneThreeCorr + standardError,
+          errorBarsMin = oneThreeCorr - standardError)
+```
+
+# Data Visualizations
+
+## Histogram of Grade Range for Lab-TOSREC-AI Dataset
+```{r}
+ggplot(df.lab.tosrec.demo, aes(x = grade, y = n, fill = grade)) +
+  geom_bar(stat = "identity", width = 1, colour="gray25") +
+  geom_text(aes(label = n), vjust = -0.5, color = "black", size = 4, family = "Avenir") +
+  xlab("Grade") +
+  ylab("Count") +
+  scale_y_continuous(limits = c(0, 400), breaks=seq(0,400,50), expand = c(0, 0)) +
+  scale_fill_manual(name = "Grade", values = wes_palette("Zissou1", n=8, type = "continuous")) +
+  ggtitle("Grade Distribution of Lab-TOSREC Dataset") +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12))
+
+ggplot(df.lab.ai.demo, aes(x = grade, y = n, fill = grade)) +
+  geom_bar(stat = "identity", width = 1, colour="gray25") +
+  geom_text(aes(label = n), vjust = -0.5, color = "black", size = 4, family = "Avenir") +
+  xlab("Grade") +
+  ylab("Count") +
+  scale_y_continuous(limits = c(0, 85), breaks=seq(0,85,10), expand = c(0, 0)) +
+  scale_fill_manual(name = "Grade", values = wes_palette("Zissou1", n=8, type = "continuous")) +
+  ggtitle("Grade Distribution of Lab-AI Dataset") +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12))
+```
+
+## Inspecting Lab-TOSREC-AI correlations against block time in 10 second intervals
+```{r}
+ggplot(df.lab.tosrec.int, mapping = aes(x = interval,
+                     y = oneThreeCorr)) + 
+  geom_point(color="gray21") + 
+  labs(title = "Lab-TOSREC Correlation vs. Time Elasped", 
+       x = "Time Elasped (in seconds)",
+       y = "SRE - TOSREC (3 minutes) Correlation") +
+  geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
+  geom_smooth(method = "loess", color="darkseagreen", se=F) +
+  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,10000), labels=seq(0, 180, by=10)) +
+  scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.1)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12))
+
+ggplot(df.lab.ai.int, mapping = aes(x = interval,
+                     y = oneThreeCorr)) + 
+  geom_point(color="gray21") + 
+  labs(title = "Lab-AI Correlation vs. Time Elasped", 
+       x = "Time Elasped (in seconds)",
+       y = "Lab (3 minutes) - AI Correlation") +
+  geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
+  geom_smooth(method = "loess", color="darkseagreen", se=F) +
+  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,10000), labels=seq(0, 180, by=10)) +
+  scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.1)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12))
+```
+
+## Inspecting Lab-TOSREC-AI correlations against block time in 10 second intervals (with Grade Response)
+```{r}
+ggplot(df.lab.tosrec.grade, mapping = aes(x = interval,
+                     y = oneThreeCorr, color=grade)) + 
+  labs(title = "Lab-TOSREC Correlation vs. Time Elasped", 
+       x = "Time Elasped (in seconds)",
+       y = "SRE - TOSREC (3 minutes) Correlation") +
+  facet_wrap(~grade) +
+  scale_color_manual(name = "Grade", values = wes_palette("Zissou1", n = 8, type = "continuous")) +
+  geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
+  geom_smooth(method = "loess", se=F) +
+  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,30000), labels=seq(0, 180, by=30)) +
+  scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.2)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12)) 
+
+ggplot(df.lab.ai.grade, mapping = aes(x = interval,
+                     y = oneThreeCorr, color=grade)) + 
+  labs(title = "Lab-AI Correlation vs. Time Elasped", 
+       x = "Time Elasped (in seconds)",
+       y = "Lab (3 minutes) - AI Correlation") +
+  facet_wrap(~grade) +
+  scale_color_manual(name = "Grade", values = wes_palette("Zissou1", n = 8, type = "continuous")) +
+  geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
+  geom_smooth(method = "loess", se=F) +
+  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,30000), labels=seq(0, 180, by=30)) +
+  scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.2)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12)) 
+```
+
+```{r}
+# df.combined.interval.grade <- df.lab.interval %>%
+#   merge(df.tosrec.interval, by=c("pid", "runId", "interval")) %>%
+#   select(pid, runId, labScore, tosrecScore, 
+#          seconds_elasped_lab, seconds_elasped_tosrec, interval) %>%
+#   left_join(df.grade, by=c("pid", "runId")) %>%
+#   group_by(interval, gradeResponse) %>%
+#   reframe(corr = cor(labScore, tosrecScore))
+```
+
+```{r}
+# df.grade <- df.block.time %>%
+#   select(pid, runId, gradeResponse)
+```
