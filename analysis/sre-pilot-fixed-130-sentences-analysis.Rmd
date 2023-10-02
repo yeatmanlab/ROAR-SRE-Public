@@ -1,0 +1,409 @@
+---
+title: "ROAR-SRE-Pilot Fixed Items Analysis & Figures"
+author: "Jasmine Tran"
+date:  "`r Sys.Date()`"
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 4
+    theme: cosmo
+    highlight: tango
+---
+
+# Load Packages
+
+Let's first load the packages that we need for this chapter.
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+library(MatchIt)
+library(knitr)
+library(stringr)
+library(ggpubr)
+library(mirt)
+library(kableExtra)
+library(tidyverse)
+library(purrr)
+library(plyr)
+library(ggplot2)
+library(viridis)
+library(ggsci)
+library(wesanderson)
+library(dplyr)
+library(plotrix)
+opts_knit$set(root.dir = "~/Documents/roar-analysis")
+```
+
+## Settings
+```{r echo = FALSE}
+# sets how code looks in knitted document
+opts_chunk$set(comment = "")
+# suppresses warning about grouping 
+options(dplyr.summarise.inform = F)
+```
+
+## Functions 
+```{r, include = FALSE}
+every_nth = function(n) {
+  return(function(x) {x[c(TRUE, rep(FALSE, n - 1))]})
+}
+```
+
+# Data 
+
+Data & analysis code was pulled from the ROAR-Score repository on Github (https://github.com/yeatmanlab/ROAR-Score/tree/main/Analysis/SRE_research/data). 
+
+## Data Loading (Reference Dataframes)
+```{r, include = FALSE}
+df.fixed.list <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/fixed_list.csv")
+df.sentence.lt <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/sentence_lookup.csv") %>%
+  dplyr::rename("sentenceId" = variable)
+```
+
+## Data Loading (Response Matrix)
+```{r, include = FALSE}
+df.resp.matrix.raw <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/sft_response_pattern_w_lab_w_kipp.csv")
+df.rt.matrix.raw <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/sft_response_time_w_lab_w_kipp.csv")
+```
+
+# Study 1: Creation and analysis of sentence reading efficiency items
+
+We created a list of 200 sentences for Sentence Reading Efficiency, an online, automated assessment in which participants endorse sentences as being true or false. These sentences were created by human researchers who referenced the sentence structure of other sentence reading efficiency tasks such as the Test of Silent Reading Comprehension and Efficiency (TOSREC) and the Woodcock-Johnson Sentence Reading Fluency (WJ-SRF).
+
+167 participants aged 5-29 who were recruited across 3 different studies piloted the task. Based on these data, we conducted item-level analysis to filter out items that are not suitable for the task, leaving us with 136 final sentences.
+
+Setting variables that will be used in code later on
+```{r, include = FALSE}
+resp.length <- length(colnames(df.resp.matrix.raw))
+rt.length <- length(colnames(df.rt.matrix.raw))
+```
+
+```{r, include = FALSE}
+df.lab.resp <- df.resp.matrix.raw %>%
+  select(subj, starts_with("lab"))
+
+lab.length <- length(colnames(df.lab.resp))
+```
+
+```{r, include = FALSE}
+df.tosrec.resp <- df.resp.matrix.raw %>%
+  select(subj, starts_with("TOSREC"))
+
+tosrec.length <- length(colnames(df.tosrec.resp))
+```
+
+## Participant Sample for Item Analysis
+
+The assessment offers the participants only 2 choices: true or false; participants who are guessing can be expected to get ~50% of the items corrects. Thus, we conservatively remove participants from our sample if they could not correctly endorse more than 60% (0.60) of the items. We filtered out 16 participants, leaving us with 151 participants for the final sample.
+
+### Data wrangling for response matrices (Lab & TOSREC)
+```{r, include = FALSE}
+# unfiltered dataframe of participants who took lab (without removing lab members who were testing — amy's way)
+df.resp.matrix.lab <- df.resp.matrix.raw %>%
+  select(subj, starts_with("lab")) %>% # filtering based on the lab sentences ONLY
+  mutate(correct = rowSums(df.resp.matrix.raw[2:lab.length], na.rm = T),
+         incorrect = rowSums(df.resp.matrix.raw[2:lab.length] == 0, na.rm = T),
+         sum = correct + incorrect, 
+         final = correct - incorrect,
+         propCorrect = correct/sum)
+```
+
+```{r, include = FALSE}
+# unfiltered dataframe of participants who saw TOSREC (without removing lab members who were testing — amy's way)
+df.resp.matrix.tosrec <- df.resp.matrix.raw %>%
+  select(subj, starts_with("TOSREC")) %>% # filtering based on the lab sentences ONLY
+  mutate(correct = rowSums(df.resp.matrix.raw[2:lab.length], na.rm = T),
+         incorrect = rowSums(df.resp.matrix.raw[2:lab.length] == 0, na.rm = T),
+         sum = correct + incorrect, 
+         final = correct - incorrect,
+         propCorrect = correct/sum) 
+```
+
+### Data wrangling for RT matrices (Lab)
+```{r, include = FALSE}
+# unfiltered dataframe of participants who took lab (without removing lab members who were testing — amy's way)
+df.rt.matrix.lab <- df.rt.matrix.raw %>%
+  select(subj, starts_with("lab")) 
+```
+
+```{r, include = FALSE}
+df.rt.melted <- df.rt.matrix.lab %>%
+  pivot_longer(cols = -subj, 
+               names_to = "sentenceId",
+               values_to = "response") %>%
+  filter(!is.na(response)) # filtering out NAs (unseen items) 
+```
+
+### Filtering out participants who have less than 60% correct
+```{r, include = FALSE}
+# filtering participants if their proportion correct (propCorrect) > 0.60
+df.resp.matrix.lab.filtered <- df.resp.matrix.lab %>%
+  filter(propCorrect > 0.60) %>%
+  select(-c(correct, incorrect, sum, propCorrect, final)) 
+```
+
+```{r}
+df.filtered.participants <- df.resp.matrix.lab.filtered %>%
+  mutate(keep = 1) %>%
+  select(subj, keep)
+```
+
+```{r, include = FALSE}
+df.item.avg.rt <- df.rt.melted %>%
+  left_join(df.filtered.participants, by = "subj") %>%
+  filter(!is.na(keep)) %>%
+  select(-keep) %>%
+  group_by(sentenceId) %>%
+  dplyr::summarise(sum = sum(response),
+                   avgRT = mean(response)) %>%
+  mutate(avgRTStd = scale(avgRT))
+```
+
+## Removing Items for Final Sentences
+
+We filtered out items that had a proportion correct of 85% or greater for our intial pass of the stimuli bank.
+```{r, include = FALSE}
+df.resp.melted <- df.resp.matrix.lab.filtered %>%
+  pivot_longer(cols = -subj, 
+               names_to = "sentenceId",
+               values_to = "response") %>%
+  filter(!is.na(response)) # filtering out NAs (unseen items) 
+```
+
+```{r, include = FALSE}
+df.item.sum <- df.resp.melted %>%
+  group_by(sentenceId) %>%
+  dplyr::summarise(correct = sum(response == 1))
+```
+
+```{r, include=FALSE}
+table.endorsement <- df.resp.melted %>%
+  select(-c(subj, response))
+```
+
+```{r, include = FALSE}
+# creating a data frame with item-level scores for analysis
+df.lab.items <- as.data.frame(table(table.endorsement$sentenceId)) %>%
+  mutate(corpus = sub("_.*", "", Var1),
+         itemNum = as.numeric(sub(".*_", "", Var1)),
+         blockId = ifelse(corpus == "lab", "lab", "TOSREC")) %>%
+  dplyr::rename("sentenceId" = Var1, "attempted" = Freq) %>% 
+  left_join(df.item.sum, by="sentenceId") %>%
+  mutate(pCorr = correct/attempted) %>%
+  arrange(itemNum) %>%
+  select(sentenceId, itemNum, attempted, correct, pCorr) %>%
+  filter(grepl('lab', sentenceId)) %>%
+  mutate(pCorrStd = scale(pCorr)) 
+```
+
+```{r, include = FALSE}
+# merging the items with the sentence look-up so we know what sentence each item is
+df.lab.items.unfiltered <- df.lab.items %>%
+  left_join(df.sentence.lt, by="sentenceId") %>%
+  select(sentenceId, sentence, "answerKey"=answer_key, everything()) 
+```
+
+We retained items that had a proportion correct greater than 0.85 (85%) for two reasons: 1) We wanted to ensure that the task would be relatively easy for participants, and 2) we need a sufficient number of sentences so participants are not able to exhaust the whole stimuli pool. We also filtered out items that had 25 or less responses.
+
+After filtering out 38 items, we were left with 162 items that we conducted further analysis on.
+```{r, include = FALSE}
+# filtering out items that didn't have a pCorr greater than 0.85
+df.lab.items.filtered.v1 <- df.lab.items.unfiltered %>%
+  filter(pCorr > 0.85)
+```
+
+```{r, include = FALSE}
+# filtering out items that didn't have a pCorr greater than 0.85
+df.lab.items.filtered.v2 <- df.lab.items.filtered.v1 %>%
+  filter(attempted > 25)
+```
+
+```{r, include = FALSE}
+# looking at avg RT against agreeability (pCorr) + analyzing against sentence length
+df.lab.items.filtered.v3 <- df.lab.items.filtered.v2 %>%
+  left_join(df.item.avg.rt, by="sentenceId") %>%
+  mutate(sentenceSmooshed = gsub(" ", "", sentence),
+         numCharacter = nchar(sentenceSmooshed)) %>%
+  select(-sentenceSmooshed)
+```
+
+```{r, include = FALSE}
+df.lab.items.filtered.v3
+```
+
+## Inspecting relationship between agreeability and average reaction time (RT)
+```{r}
+ggplot(df.lab.items.filtered.v3, mapping = aes(x = avgRTStd,
+                     y = pCorrStd, color=numCharacter)) + 
+  geom_point() + 
+  labs(title = "Response Time vs. Agreeability Rate",
+       color = "Sentence Length \n(Number of \nCharacters)") + 
+  scale_x_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)), "Faster <-------   Response Time ----> Slower") +
+  scale_y_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)),"Less <-------   Agreeability   ---->  More ") +
+  scale_color_viridis(option = 'viridis') +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12)) 
+```
+
+### Removing a sentence because of the long response time despite the short character length
+```{r}
+df.lab.items.filtered.v4 <- df.lab.items.filtered.v3 %>%
+  filter(sentenceId != "lab_56")
+```
+
+### Matching items based on easy, medium, and hard difficulty
+
+In order to ensure that we have an equal number of true and false sentences, we used the R package [MatchIt](https://cran.r-project.org/web/packages/MatchIt/vignettes/MatchIt.html) to match the items based on item difficulty (or proportion correct). Note that difficulties for each item were defined as: 
+
+-   **Easy**: Items that have a proportion correct greater than 0.95 
+
+-   **Medium**: Items that have a proportion correct greater than 0.90 but less than or equal to 0.95 
+
+-   **Hard**: Items that have a proportion correct less than than 0.90 
+
+```{r, include = FALSE}
+# assigning difficulty to items
+df.lab.items.filtered.difficulty <- df.lab.items.filtered.v4 %>%
+  mutate(difficulty = case_when(
+    pCorr > 0.95 ~ "Easy",
+    pCorr <= 0.95 & pCorr > 0.90 ~ "Medium",
+    pCorr < 0.90 ~ "Hard"))
+```
+
+### Matching easy sentences
+```{r, include = FALSE}
+df.lab.items.easy <- df.lab.items.filtered.difficulty %>%
+  filter(difficulty == "Easy", sentenceId != "lab_196")
+```
+
+```{r, include = FALSE}
+matched.easy <- matchit(answerKey ~ pCorr , data = df.lab.items.easy, method = "nearest", distance = "glm")
+df.lab.items.easy.final <- match.data(matched.easy)
+```
+
+After matching the easy sentences, 40 sentences (20 true and 20 false) were included in the final set of sentences. 
+
+#### Excluded easy sentences 
+```{r, include = FALSE}
+df.easy.excluded <- df.lab.items.easy.final %>%
+  mutate(keep = 1) %>%
+  select(sentenceId, sentence, keep) %>%
+  right_join(df.lab.items.easy, by=c("sentenceId", "sentence")) %>%
+  filter(is.na(keep)) %>% 
+  select(-keep)
+```
+
+```{r}
+df.easy.excluded
+```
+
+#### Final easy sentences
+```{r}
+df.lab.items.easy.final
+```
+
+### Matching medium sentences
+```{r}
+df.lab.items.medium <- df.lab.items.filtered.difficulty %>%
+  filter(difficulty == "Medium")
+```
+
+```{r, include = FALSE}
+matched.medium <- matchit(answerKey ~ pCorr , data = df.lab.items.medium, method = "nearest", distance = "glm")
+df.lab.items.medium.final <- match.data(matched.medium)
+```
+
+After matching the medium sentences, 64 sentences (32 true and 32 false) were included in the final set of sentences. 
+
+#### Excluded medium sentences 
+```{r, include = FALSE}
+df.medium.excluded <- df.lab.items.medium.final %>%
+  mutate(keep = 1) %>%
+  select(sentenceId, sentence, keep) %>%
+  right_join(df.lab.items.medium, by=c("sentenceId", "sentence")) %>%
+  filter(is.na(keep)) %>% 
+  select(-keep)
+```
+
+```{r}
+df.medium.excluded
+```
+
+#### Final medium sentences
+```{r}
+df.lab.items.medium.final
+```
+
+### Matching hard sentences
+```{r, include = FALSE}
+df.lab.items.hard <- df.lab.items.filtered.difficulty %>%
+  filter(difficulty == "Hard") 
+```
+
+```{r, include = FALSE}
+# earlier versions of MatchIt randomly select items if they have the same propensity score
+# this makes sure that the same item is selected
+df.lab.items.hard.filtered <- df.lab.items.hard %>%
+  filter(sentenceId != "lab_59")
+```
+
+```{r, include = FALSE}
+matched.hard <- matchit(answerKey ~ pCorr , data = df.lab.items.hard.filtered, method = "nearest", distance = "glm")
+df.lab.items.hard.final <- match.data(matched.hard)
+```
+
+After matching the hard sentences, 26 sentences (13 true and 13 false) were included in the final set of sentences. 
+
+#### Excluded hard sentences 
+```{r, include = FALSE}
+df.hard.excluded <- df.lab.items.hard.final %>%
+  mutate(keep = 1) %>%
+  select(sentenceId, sentence, keep) %>%
+  right_join(df.lab.items.hard, by=c("sentenceId", "sentence")) %>%
+  filter(is.na(keep)) %>% 
+  select(-keep)
+```
+
+```{r}
+df.hard.excluded
+```
+
+#### Final hard sentences
+```{r}
+df.lab.items.hard.final
+```
+
+### Final set of sentences
+
+We are left with a final stimuli bank of 130 sentences, consisting of 40 easy, 64 medium, and 26 hard sentences.
+```{r}
+df.lab.items.final <- df.lab.items.easy.final %>%
+  rbind(df.lab.items.medium.final) %>%
+  rbind(df.lab.items.hard.final) 
+```
+
+```{r}
+df.lab.items.final
+```
+
+## Final order of sentences (130 sentences in fixed order)
+```{r}
+set.seed(20)
+```
+
+```{r}
+easy.length <- sample(nrow(df.lab.items.easy.final))
+easy.final <- df.lab.items.easy.final[easy.length,] %>%
+  mutate(difficulty = "Easy")
+```
+
+```{r}
+medium.length <- sample(nrow(df.lab.items.medium.final))
+medium.final <- df.lab.items.medium.final[medium.length,] %>%
+  mutate(difficulty = "Medium")
+```
+
+```{r}
+hard.length <- sample(nrow(df.lab.items.hard.final))
+hard.final <- df.lab.items.hard.final[hard.length,] %>%
+  mutate(difficulty = "Hard")
+```
