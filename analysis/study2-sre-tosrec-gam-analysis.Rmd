@@ -1,0 +1,197 @@
+---
+title: "Study 2: ROAR-SRE-TOSREC GAM Analysis"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-05-22"
+---
+# Loading Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(dplyr)
+library(mgcv)
+library(ggplot2)
+library(ggpubr)
+library(pracma)
+library(equate)
+library(viridis)
+library(wesanderson)
+library(gratia)
+library(lubridate)
+library(tidygam)
+```
+
+# Data 
+
+Data was pulled from the ROAR-Research repository on Google Drive. The data can be downloaded [here](https://drive.google.com/drive/folders/1hxPnjGUWaAzcHno1xSDHWK9eWPpUIu3e?usp=drive_link).
+
+## Data Loading
+```{r SRE-data-load}
+df.raw <- read.csv('~/Documents/roar-analysis/data/sre-paper-data/study2_sre_tosrec_gam.csv')
+```
+
+```{r}
+dim(df.raw)
+df.raw
+```
+
+## Data Cleaning and Wrangling
+```{r SRE-data-prep}
+# filtering out participants who are missing grade information or the necessary scores
+df.cleaned <- df.raw %>%
+  filter(!is.na(grade), 
+         !is.na(lab.raw.score), 
+         !is.na(tosrec.raw.score),
+         grade <= 8) # keeping participants in grades 1-8 
+```
+
+```{r SRE-data-prep}
+dim(df.cleaned)
+df.cleaned 
+```
+
+### Checking number of unique participants in the sample
+```{r SRE-data-prep}
+# TO DO: check with jason about how he filtered the data
+df.unique <- df.cleaned %>% 
+   distinct(pid, .keep_all = TRUE)
+```
+
+Figure A: Inspecting meta-data grade (reported by school partners) against the grade response for SRE
+```{r SRE-data-prep}
+df.grade.check <- df.cleaned
+
+ggplot(df.grade.check, aes(x=grade,y=tosrec.grade.response)) +
+  geom_bin_2d() + 
+  scale_fill_viridis(option ='magma',direction=-1) +
+  scale_x_continuous(breaks = c(1:12)) +
+  scale_y_continuous(breaks = c(1:12))
+```
+
+Figure 4: Grade distribution plot of Study 2 ROAR-SRE participant sample 
+```{r SRE-data-prep}
+df.grade.dist <- df.cleaned
+
+ggplot(df.grade.dist, aes(x=grade)) +
+  geom_bar(position="identity", fill="gray55", col=I("black"), width=1) + 
+  geom_text(stat = "count", aes(label = ..count..), vjust = -0.5, color = "black", size = 4, family = "Avenir") +
+  labs(x = "Grade",
+       y = "Count of participants") +
+  scale_y_continuous(limits = c(0, 450), expand = c(0,0)) +
+  scale_x_continuous(n.breaks = 8, expand = c(0, 0)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12)) 
+```
+
+# Analysis 
+
+### Assigning to final variable for easy de-bugging
+```{r}
+df.final <- df.cleaned
+```
+
+## Fitting GAM & local regression model (Loess) to SRE data
+```{r SRE-Fit-GAM-LOESS}
+gr.gam <- gam(equivalent.tosrec.ss ~ te(lab.raw.score, tosrec.grade.response,k=3), bs='tp', data=df.final, method='REML')
+gr.loess <- loess(equivalent.tosrec.ss ~ lab.raw.score*tosrec.grade.response, data=df.final)
+```
+
+### Checking summary of GAM & Loess
+```{r SRE-GAM-LOESS-Summary}
+summary(gr.gam)
+summary(gr.loess)
+```
+
+## Predicting TOSREC standard score for each data point
+```{r SRE-Fit-GAM-LOESS}
+df.final$predicted.tosrec.gam <- predict(gr.gam, df.final)
+df.final$predicted.tosrec.loess <- predict(gr.loess, df.final)
+```
+
+```{r SRE-Fit-GAM-LOESS}
+sprintf('GAM prediciton is correlated with TOSREC SS at r= %f', cor(df.final$predicted.tosrec.gam, df.final$equivalent.tosrec.ss, use="pairwise.complete.obs"))
+sprintf('LOESS prediciton is correlated with TOSREC SS at r= %f', cor(df.final$predicted.tosrec.loess, df.final$equivalent.tosrec.ss, use="pairwise.complete.obs"))
+```
+
+Figure 5: Inspecting predicted TOSREC standard score vs. equivalent TOSREC standard score
+```{r SRE-GAM-LOESS-Plot}
+# Plot GAM prediction
+gam.pred.plot = ggplot(df.final, aes(y = predicted.tosrec.gam, x = equivalent.tosrec.ss, color=tosrec.grade.response)) +
+  geom_point(alpha=0.65) +
+  geom_abline(slope=1,intercept = 0) +
+  facet_wrap(vars(tosrec.grade.response), nrow=2) + 
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  labs(x = "ROAR-SRE Standard Score",
+       y = "TOSREC Standard Score",
+       color = "Grade") + 
+  xlim(50,145) + 
+  ylim(50,145) + # wes anderson color palette 
+  #scale_color_gradientn(colors = wes_palette("Zissou1", type = "continuous")) +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12), strip.text = element_text(colour = 'black', face = "bold"), aspect.ratio=1)
+
+# Plot loess prediction
+loess.pred.plot = ggplot(df.final, aes(predicted.tosrec.loess, equivalent.tosrec.ss, color=tosrec.grade.response)) +
+  geom_point(alpha=0.5) +
+  geom_abline(slope=1,intercept = 0) +
+  facet_wrap(vars(tosrec.grade.response),nrow=2) + 
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  labs(x = "ROAR-SRE Standard Score",
+       y = "TOSREC Standard Score",
+       color = "Grade") + 
+  xlim(50,145) + 
+  ylim(50,145) + 
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12), strip.text = element_text(colour = 'black', face = "bold"), aspect.ratio=1) 
+
+# Viewing the plots
+gam.pred.plot
+loess.pred.plot
+```
+
+Figure: Inspecting the density of TOSREC scores by grades
+```{r SRE-TOSRECT-Lookup-Table}
+# Density of TOSREC scores by grade
+gam.ss.dens.plot <- ggplot(df.final, aes(x=equivalent.tosrec.ss,
+                                         group=tosrec.grade.response)) +
+  geom_density(aes(color=tosrec.grade.response)) +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+
+gam.raw.dens.plot <- ggplot(df.final, aes(x=lab.raw.score, group=tosrec.grade.response)) +
+  geom_density(aes(color=tosrec.grade.response))+
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+
+gam.ss.dens.plot
+gam.raw.dens.plot
+```
+
+## Evaluating the GAM and Loess for each TOSREC & grade combination
+```{r SRE-TOSRECT-Lookup-Table}
+grid <- meshgrid(x=1:8, y=0:120)
+X<- tibble(tosrec.grade.response = as.vector(grid$X))
+X$lab.raw.score <- as.vector(grid$Y)
+X$equivalent.tosrec.ss.gam <- predict(gr.gam, X)
+X$equivalent.tosrec.ss.loess <- predict(gr.loess, X)
+```
+
+Figure: Inspecting the GAM and Loess equate
+```{r SRE-TOSRECT-Lookup-Table}
+# Make a plot of the GAM and the loess equate
+ggplot(X, aes(x=lab.raw.score, y=equivalent.tosrec.ss.gam, group=tosrec.grade.response))+
+  geom_line(aes(color=tosrec.grade.response)) + xlim(0,125) + ylim(50,145) + ggtitle('GAM Prediction') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+
+ggplot(X, aes(x=lab.raw.score, y=equivalent.tosrec.ss.loess, group=tosrec.grade.response))+
+  geom_line(aes(color=tosrec.grade.response)) + xlim(0,125) + ylim(50,145) + ggtitle('LOESS Prediction') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+```
+
+# Run this chunk to save the plots 
+```{r}
+ggsave('figures/SRE-TOSREC (GAM).png', gam.pred.plot, dpi=300)
+ggsave('figures/SRE-TOSREC (Loess).png', loess.pred.plot, dpi=300)
+```
+

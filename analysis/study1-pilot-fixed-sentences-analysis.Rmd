@@ -385,7 +385,7 @@ ggplot(df.scatter.plot, mapping = aes(x = labFinalScore, y = tosrecFinalScore)) 
        y = "TOSREC Score (correct - incorrect)",
        color = "SRE Form") + 
   theme_light() +
-  theme(text=element_text(family="Avenir", size=12))
+  theme(text=element_text(family="Avenir", size=12), strip.text = element_text(colour = 'black'))
 ```
 
 ### Matching items based on easy, medium, and hard difficulty
