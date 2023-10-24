@@ -1,5 +1,5 @@
 ---
-title: "ROAR-SRE-Pilot Fixed Items Analysis & Figures"
+title: "Study 1: ROAR-SRE Pilot & Fixed Items Analysis"
 author: "Jasmine Tran"
 date:  "`r Sys.Date()`"
 output:
@@ -24,7 +24,9 @@ library(kableExtra)
 library(tidyverse)
 library(purrr)
 library(plyr)
+library(ggrepel)
 library(ggplot2)
+library(plotly)
 library(viridis)
 library(ggsci)
 library(wesanderson)
@@ -54,15 +56,21 @@ Data & analysis code was pulled from the ROAR-Score repository on Github (https:
 
 ## Data Loading (Reference Dataframes)
 ```{r, include = FALSE}
-df.fixed.list <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/fixed_list.csv")
+df.fixed.list <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/fixed_list.csv") %>%
+  dplyr::rename("sentenceId" = id)
 df.sentence.lt <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/sentence_lookup.csv") %>%
   dplyr::rename("sentenceId" = variable)
 ```
 
 ## Data Loading (Response Matrix)
 ```{r, include = FALSE}
-df.resp.matrix.raw <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/sft_response_pattern_w_lab_w_kipp.csv")
-df.rt.matrix.raw <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/sft_response_time_w_lab_w_kipp.csv")
+df.resp.matrix.raw <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/study1_srf_response_pattern.csv")
+df.rt.matrix.raw <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/study1_srf_response_time.csv")
+```
+
+## Data Loading (Meta Data)
+```{r}
+df.meta.data <- read.csv("~/Documents/roar-analysis/data/sre-paper-data/sft_meta_data_final.csv")
 ```
 
 # Study 1: Creation and analysis of sentence reading efficiency items
@@ -77,11 +85,24 @@ resp.length <- length(colnames(df.resp.matrix.raw))
 rt.length <- length(colnames(df.rt.matrix.raw))
 ```
 
+```{r}
+fixed.sentenceId.cols <- df.fixed.list %>%
+  select(sentenceId) %>%
+  as.list()
+```
+
 ```{r, include = FALSE}
 df.lab.resp <- df.resp.matrix.raw %>%
   select(subj, starts_with("lab"))
 
 lab.length <- length(colnames(df.lab.resp))
+```
+
+```{r}
+df.lab.fixed.resp.col <- df.resp.matrix.raw %>% 
+  select(subj, any_of(fixed.sentenceId.cols[["sentenceId"]])) # filtering based on the fixed lab sentences form ONLY
+
+lab.fixed.length <- length(colnames(df.lab.fixed.resp.col))
 ```
 
 ```{r, include = FALSE}
@@ -98,10 +119,19 @@ The assessment offers the participants only 2 choices: true or false; participan
 ### Data wrangling for response matrices (Lab & TOSREC)
 ```{r, include = FALSE}
 # unfiltered dataframe of participants who took lab (without removing lab members who were testing — amy's way)
-df.resp.matrix.lab <- df.resp.matrix.raw %>%
-  select(subj, starts_with("lab")) %>% # filtering based on the lab sentences ONLY
-  mutate(correct = rowSums(df.resp.matrix.raw[2:lab.length], na.rm = T),
-         incorrect = rowSums(df.resp.matrix.raw[2:lab.length] == 0, na.rm = T),
+df.resp.matrix.lab <- df.lab.resp %>%
+  mutate(correct = rowSums(df.lab.resp[2:lab.length], na.rm = T),
+         incorrect = rowSums(df.lab.resp[2:lab.length] == 0, na.rm = T),
+         sum = correct + incorrect, 
+         final = correct - incorrect,
+         propCorrect = correct/sum)
+```
+
+```{r, include = FALSE}
+# unfiltered dataframe of participants based off fixed lab form (without removing lab members who were testing — amy's way)
+df.resp.matrix.lab.fixed <- df.lab.fixed.resp.col %>% 
+  mutate(correct = rowSums(df.lab.fixed.resp.col[2:lab.fixed.length], na.rm = T),
+         incorrect = rowSums(df.lab.fixed.resp.col[2:lab.fixed.length] == 0, na.rm = T),
          sum = correct + incorrect, 
          final = correct - incorrect,
          propCorrect = correct/sum)
@@ -109,10 +139,9 @@ df.resp.matrix.lab <- df.resp.matrix.raw %>%
 
 ```{r, include = FALSE}
 # unfiltered dataframe of participants who saw TOSREC (without removing lab members who were testing — amy's way)
-df.resp.matrix.tosrec <- df.resp.matrix.raw %>%
-  select(subj, starts_with("TOSREC")) %>% # filtering based on the lab sentences ONLY
-  mutate(correct = rowSums(df.resp.matrix.raw[2:lab.length], na.rm = T),
-         incorrect = rowSums(df.resp.matrix.raw[2:lab.length] == 0, na.rm = T),
+df.resp.matrix.tosrec <- df.tosrec.resp %>%
+  mutate(correct = rowSums(df.tosrec.resp[2:tosrec.length], na.rm = T),
+         incorrect = rowSums(df.tosrec.resp[2:tosrec.length] == 0, na.rm = T),
          sum = correct + incorrect, 
          final = correct - incorrect,
          propCorrect = correct/sum) 
@@ -138,7 +167,7 @@ df.rt.melted <- df.rt.matrix.lab %>%
 # filtering participants if their proportion correct (propCorrect) > 0.60
 df.resp.matrix.lab.filtered <- df.resp.matrix.lab %>%
   filter(propCorrect > 0.60) %>%
-  select(-c(correct, incorrect, sum, propCorrect, final)) 
+  select(-c(correct, incorrect, sum, propCorrect, final))
 ```
 
 ```{r}
@@ -158,9 +187,63 @@ df.item.avg.rt <- df.rt.melted %>%
   mutate(avgRTStd = scale(avgRT))
 ```
 
+### Compiling descriptive statistics for each recruitment group (Lab & TOSREC scores)
+```{r}
+df.renamed <- df.meta.data %>%
+  dplyr::rename("subj" = pid) 
+```
+
+```{r}
+df.lab.stats <- df.resp.matrix.lab %>%
+  select(subj, "labFinalScore" = final) %>%
+  mutate(labCorpus = "Pilot")
+```
+
+```{r}
+df.lab.fixed.stats <- df.resp.matrix.lab.fixed %>%
+  select(subj, "labFinalScore" = final) %>%
+  mutate(labCorpus = "Fixed")
+```
+
+```{r}
+df.tosrec.stats <- df.resp.matrix.tosrec %>%
+  select(subj, "tosrecFinalScore" = final)
+```
+
+```{r}
+df.age.stats <- df.filtered.participants %>%
+  left_join(df.renamed, by="subj") %>%
+  left_join(df.lab.stats, by="subj") %>%
+  left_join(df.tosrec.stats, by="subj") %>%
+  group_by(group) %>%
+  summarise(min_age = min(age, na.rm = TRUE), 
+            max_age = max(age, na.rm = TRUE),
+            mean_age = mean(age, na.rm = TRUE),
+            sd_age = sd(age, na.rm = TRUE),
+            mean_lab = mean(labFinalScore, na.rm = TRUE),
+            sd_lab = sd(labFinalScore, na.rm = TRUE),
+            mean_tosrec = mean(tosrecFinalScore, na.rm = TRUE),
+            sd_tosrec = sd(tosrecFinalScore, na.rm = TRUE),
+            count = n()) %>%
+  mutate(across(where(is.numeric), ~round(., 2)))
+```
+
+```{r}
+df.age.stats
+```
+
+### Creating data frame for the scatter plot of Pilot, Fixed, and TOSREC final scores
+```{r}
+df.sre.tosrec.scores <- df.filtered.participants %>%
+  left_join(df.lab.stats, by="subj") %>%
+  full_join(df.lab.fixed.stats, by=c("subj", "labCorpus", "labFinalScore")) %>%
+  left_join(df.tosrec.stats, by="subj") %>%
+  select(-keep)
+```
+
 ## Removing Items for Final Sentences
 
-We filtered out items that had a proportion correct of 85% or greater for our intial pass of the stimuli bank.
+We filtered out items that had a proportion correct of 85% or greater for our initial pass of the stimuli bank.
 ```{r, include = FALSE}
 df.resp.melted <- df.resp.matrix.lab.filtered %>%
   pivot_longer(cols = -subj, 
@@ -205,49 +288,104 @@ df.lab.items.unfiltered <- df.lab.items %>%
 We retained items that had a proportion correct greater than 0.85 (85%) for two reasons: 1) We wanted to ensure that the task would be relatively easy for participants, and 2) we need a sufficient number of sentences so participants are not able to exhaust the whole stimuli pool. We also filtered out items that had 25 or less responses.
 
 After filtering out 38 items, we were left with 162 items that we conducted further analysis on.
+
 ```{r, include = FALSE}
 # filtering out items that didn't have a pCorr greater than 0.85
 df.lab.items.filtered.v1 <- df.lab.items.unfiltered %>%
-  filter(pCorr > 0.85)
+  left_join(df.item.avg.rt, by="sentenceId") %>%
+  mutate(sentenceSmooshed = gsub(" ", "", sentence),
+         numWords = str_count(sentence,"\\w+"),
+         numCharacter = nchar(sentenceSmooshed)) %>%
+  select(-sentenceSmooshed) %>%
+  filter(attempted > 25)
+```
+
+Figure 1: Filtering items based on proportion correct & inspecting average reaction time (RT)
+```{r}
+df.filtered.plot <- df.lab.items.filtered.v1 %>%
+  mutate(Filtered = ifelse(pCorr > 0.85, "True", "False"))
+
+filtered.plot <- ggplot(data = df.filtered.plot, label = sentence, aes(label = sentence)) + 
+  geom_point(data = df.filtered.plot, mapping = aes(x = avgRT,
+                     y = pCorr, color=Filtered)) + 
+  labs(color = "Retained in item bank") + 
+  scale_x_continuous("Average response time (seconds)") +
+  scale_y_continuous("Agreement rate (proportion)") +
+  geom_hline(yintercept = 0.85, color = "#F8766D", linetype = "dashed", linewidth = 0.75) +
+  geom_label_repel(data = df.filtered.plot %>% 
+                     filter(sentenceId == "lab_40" | sentenceId == "lab_0"
+                            | sentenceId == "lab_23" | sentenceId == "lab_43"),
+                   aes(avgRT, pCorr, label=sentence),
+                   nudge_x = 0.05, nudge_y = -0.03,
+                   fill = "gray95", family="Avenir", size = 2.5) +
+  guides(color = guide_legend(reverse = TRUE)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12), 
+        legend.position = c(0.18, 0.2),
+        legend.background = element_rect(fill="gray95", linewidth = 0.5, linetype ="solid", colour ="gray80"))
+```
+
+```{r}
+#ggplotly(filtered.plot)
+filtered.plot
 ```
 
 ```{r, include = FALSE}
 # filtering out items that didn't have a pCorr greater than 0.85
 df.lab.items.filtered.v2 <- df.lab.items.filtered.v1 %>%
-  filter(attempted > 25)
+   filter(pCorr > 0.85)
 ```
 
 ```{r, include = FALSE}
-# looking at avg RT against agreeability (pCorr) + analyzing against sentence length
-df.lab.items.filtered.v3 <- df.lab.items.filtered.v2 %>%
-  left_join(df.item.avg.rt, by="sentenceId") %>%
-  mutate(sentenceSmooshed = gsub(" ", "", sentence),
-         numCharacter = nchar(sentenceSmooshed)) %>%
-  select(-sentenceSmooshed)
+df.lab.items.filtered.v2
 ```
 
-```{r, include = FALSE}
-df.lab.items.filtered.v3
-```
-
-## Inspecting relationship between agreeability and average reaction time (RT)
+Figure 2: Inspecting relationship between agreement rate and average RT
 ```{r}
-ggplot(df.lab.items.filtered.v3, mapping = aes(x = avgRTStd,
+df.quad.plot <- df.lab.items.filtered.v2 
+
+quad.plot <- ggplot(data = df.quad.plot, label = sentence, aes(label = sentence)) + 
+  geom_point(data = df.quad.plot, mapping = aes(x = avgRTStd,
                      y = pCorrStd, color=numCharacter)) + 
-  geom_point() + 
-  labs(title = "Response Time vs. Agreeability Rate",
-       color = "Sentence Length \n(Number of \nCharacters)") + 
-  scale_x_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)), "Faster <-------   Response Time ----> Slower") +
-  scale_y_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)),"Less <-------   Agreeability   ---->  More ") +
+  labs(color = "Sentence Length \n(Number of \nCharacters)") + 
+  geom_label_repel(data = df.quad.plot %>% 
+                     filter(sentenceId == "lab_56"),
+                   aes(avgRTStd, pCorrStd, label=sentence),
+                   nudge_x = 0.3, nudge_y = -0.5,
+                   fill = "gray95", family="Avenir", size = 2.5) +
+  scale_x_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)), "Average response time (seconds)") +
+  scale_y_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)),"Average agreement rate (proportion)") +
   scale_color_viridis(option = 'viridis') +
   theme_light() +
   theme(text=element_text(family="Avenir", size=12)) 
 ```
 
+```{r}
+#ggplotly(quad.plot)
+quad.plot
+```
+
 ### Removing a sentence because of the long response time despite the short character length
 ```{r}
-df.lab.items.filtered.v4 <- df.lab.items.filtered.v3 %>%
+df.lab.items.filtered.v3 <- df.lab.items.filtered.v2 %>%
   filter(sentenceId != "lab_56")
+```
+
+Figure 3: Scatter plot of SRE-Pilot vs. SRE-Fixed vs. TOSREC
+```{r}
+df.scatter.plot <- df.sre.tosrec.scores
+
+ggplot(df.scatter.plot, mapping = aes(x = labFinalScore, y = tosrecFinalScore)) + 
+  geom_point(size = 1.5, color = "gray20") +
+  geom_smooth(method = "lm", color="black") +
+  facet_wrap(~labCorpus) +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), color = "black", 
+           geom = "label", hjust = -0.3, vjust = 1) +
+  labs(x = "SRE Score (correct - incorrect)",
+       y = "TOSREC Score (correct - incorrect)",
+       color = "SRE Form") + 
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12))
 ```
 
 ### Matching items based on easy, medium, and hard difficulty
@@ -262,7 +400,7 @@ In order to ensure that we have an equal number of true and false sentences, we 
 
 ```{r, include = FALSE}
 # assigning difficulty to items
-df.lab.items.filtered.difficulty <- df.lab.items.filtered.v4 %>%
+df.lab.items.filtered.difficulty <- df.lab.items.filtered.v3 %>%
   mutate(difficulty = case_when(
     pCorr > 0.95 ~ "Easy",
     pCorr <= 0.95 & pCorr > 0.90 ~ "Medium",
@@ -272,7 +410,7 @@ df.lab.items.filtered.difficulty <- df.lab.items.filtered.v4 %>%
 ### Matching easy sentences
 ```{r, include = FALSE}
 df.lab.items.easy <- df.lab.items.filtered.difficulty %>%
-  filter(difficulty == "Easy", sentenceId != "lab_196")
+  filter(difficulty == "Easy", sentenceId != "lab_196") # sentence doesn't exist in analysis? why?
 ```
 
 ```{r, include = FALSE}
