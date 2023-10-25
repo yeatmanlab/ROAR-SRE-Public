@@ -1,0 +1,125 @@
+---
+title: "Study 3: ROAR-SRE AI form analysis"
+output:
+  html_document: default
+  pdf_document: default
+date:  "`r Sys.Date()`"
+---
+# Loading Packages
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(dplyr)
+library(mgcv)
+library(ggplot2)
+library(ggpubr)
+library(pracma)
+library(viridis)
+library(wesanderson)
+library(lubridate)
+```
+
+# Data 
+
+Data was pulled from the ROAR-Research repository on Google Drive. The data can be downloaded [here](https://drive.google.com/drive/folders/1hxPnjGUWaAzcHno1xSDHWK9eWPpUIu3e?usp=drive_link).
+
+## Data Loading
+
+```{r SRE-data-load}
+# anya's directory 
+df.runs <- read.csv("~/Documents/Code/FirebaseData/sre-runs-092023.csv")
+df.trials <- read.csv("~/Documents/Code/FirebaseData/sre-trials-092023.csv")
+df.grade <- read.csv("~/Documents/Data/school_secure_data/new-dashboard-user-ages-grades.csv")
+```
+
+## Data Wrangling
+```{r}
+df.invalid.runs <- df.trials %>% 
+   filter(completed == "True", user.userType == "student",!is.na(blockId)) %>%
+   group_by(runId, blockId) %>% 
+   summarise(medianRT = median(rt), pc = mean(correct)) %>% 
+  filter(pc <= 0.5, medianRT < 500)
+```
+
+```{r}
+df.runs.selected <- df.runs %>% 
+  select(user.assessmentPid, completed, runId, user.userType,
+         scores.computed.lab.sreScore,
+         scores.computed.aiV1P1.sreScore, 
+         scores.computed.aiV1P2.sreScore)
+  
+```
+
+```{r}
+df.valid.runs.selected <- df.runs.selected %>% 
+  filter(completed == "True", user.userType == "student") %>% 
+  left_join(df.grade %>% 
+  select(assessmentPid, grade) %>% 
+  rename(user.assessmentPid = assessmentPid)) %>% 
+  filter(grade != "Kindergarten", !is.na(grade)) %>% 
+  mutate(grade = as.numeric(grade)) %>% 
+  filter(!runId %in% df.invalid.runs$runId)
+```
+
+# Visualization
+```{r}
+df.valid.runs.selected.p1 <- df.valid.runs.selected %>% 
+  filter(!is.na(scores.computed.aiV1P1.sreScore)) 
+
+df.valid.runs.selected.p2 <- df.valid.runs.selected %>% 
+  filter(!is.na(scores.computed.aiV1P2.sreScore)) 
+```
+grade distribution
+```{r}
+df.valid.runs.selected.p1 %>% 
+  group_by(grade) %>% 
+  tally()
+```
+
+```{r}
+ggplot(df.valid.runs.selected.p1, mapping = aes(y = scores.computed.aiV1P1.sreScore,
+                     x = scores.computed.lab.sreScore)) + 
+  facet_wrap(~grade) +
+  geom_point(alpha=0.5, size = 0.2) +
+  geom_abline(slope=1,intercept = 0) +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  geom_point(aes(color=grade)) + ggtitle('SRE vs. AI parallel 1') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+
+ggplot(df.valid.runs.selected.p2, mapping = aes(y = scores.computed.aiV1P2.sreScore,
+                     x = scores.computed.lab.sreScore)) + 
+  facet_wrap(~grade) +
+  geom_point(alpha=0.5, size = 0.2) +
+  geom_abline(slope=1,intercept = 0) +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  geom_point(aes(color=grade)) + ggtitle('SRE vs. AI parallel 2') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) 
+```
+
+
+```{r}
+df.valid.runs.selected.combined <- df.valid.runs.selected.p1 %>% 
+  mutate(ai_score = scores.computed.aiV1P1.sreScore, form = "AI-Form 1") %>% 
+  rbind(df.valid.runs.selected.p2 %>% 
+  mutate(ai_score = scores.computed.aiV1P2.sreScore, form = "AI-Form 2"))
+```
+```{r}
+
+t.test( df.valid.runs.selected.combined$ai_score,  df.valid.runs.selected.combined$scores.computed.lab.sreScore)
+```
+
+```{r}
+ggplot(df.valid.runs.selected.combined, mapping = aes(y = ai_score,
+                     x = scores.computed.lab.sreScore)) + 
+  facet_wrap(~form) +
+  xlim(-30, 130) + 
+  ylim(-30, 130) +
+  labs(x = "ROAR-SRE Lab Form", 
+       y = "AI Parallel Form") + 
+  coord_equal() +
+  geom_abline(slope=1,intercept = 0) +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  geom_point(aes(color=grade), alpha = 0.7, size = 1) + ggtitle('SRE vs. AI') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+```
+
