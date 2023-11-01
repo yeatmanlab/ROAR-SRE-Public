@@ -29,22 +29,48 @@ Data was pulled from the ROAR-Research repository on Google Drive. The data can 
 # anya's directory 
 df.runs <- read.csv("~/Documents/Code/FirebaseData/sre-runs-092023.csv")
 df.trials <- read.csv("~/Documents/Code/FirebaseData/sre-trials-092023.csv")
+df.trials.additional <- read.csv("~/Documents/Data/roar_trial_data/sre-trials-after101723-103123.csv")
 df.grade <- read.csv("~/Documents/Data/school_secure_data/new-dashboard-user-ages-grades.csv")
 ```
 
 ## Data Wrangling
+
+```{r}
+df.invalid.runs.additional <- df.trials.additional %>% 
+  filter(completed == "True", variantId == "Kh5eSiySVgLNaGHrFEwu", user.userType == "student",!is.na(blockId), !is.na(user.grade)) %>% 
+  group_by(runId, blockId) %>% 
+   summarise(medianRT = median(rt), pc = mean(correct)) %>% 
+  filter(pc < 0.65, medianRT < 1000)
+
+df.additional.combined <- df.trials.additional %>% 
+  filter(completed == "True",variantId == "Kh5eSiySVgLNaGHrFEwu", user.userType == "student",!is.na(blockId), !is.na(user.grade)) %>% 
+  filter(!runId %in% df.invalid.runs.additional$runId) %>% 
+  group_by(user.assessmentPid, runId, corpusId, user.grade) %>% 
+  mutate(correct = ifelse(correct == 1, 1, -1)) %>% 
+  summarise(totalScore = sum(correct ))
+```
+
+
 ```{r}
 df.invalid.runs <- df.trials %>% 
-   filter(!user.assessmentPid %in% c("tncs-jas-test", "tncs-anya-test")) %>% 
-   filter(completed == "True", user.userType == "student",!is.na(blockId)) %>%
-   group_by(runId, blockId) %>% 
+   filter(completed == "True", user.userType == "student",!is.na(blockId), assessment_stage == "test_response") %>%
+   group_by(runId, blockId, user.assessmentPid) %>% 
    summarise(medianRT = median(rt), pc = mean(correct)) %>% 
-  filter(pc <= 0.5, medianRT < 500)
+  filter(pc < 0.65, medianRT < 1000) 
+# 
+# df.invalid.runs %>% 
+#   left_join(df.grade %>% select(assessmentPid, grade) %>% rename(user.assessmentPid = assessmentPid)) %>% 
+#   arrange(user.assessmentPid)%>% 
+#   group_by(runId, grade) %>%
+#   tally() %>%
+#   group_by(grade) %>%
+#   tally()
 ```
+
 
 ```{r}
 df.runs.selected <- df.runs %>% 
-  select(user.assessmentPid, completed, runId, user.userType,
+  select(user.assessmentPid, completed, variantId, runId, user.userType,
          scores.computed.lab.sreScore,
          scores.computed.aiV1P1.sreScore, 
          scores.computed.aiV1P2.sreScore)
@@ -53,6 +79,7 @@ df.runs.selected <- df.runs %>%
 
 ```{r}
 df.valid.runs.selected <- df.runs.selected %>% 
+   filter(!user.assessmentPid %in% c("tncs-jas-test", "tncs-anya-test", "lab-carrie-test", "test-testlab-321d4e14", "testma-testmas-6a674ce6"), variantId == "Kh5eSiySVgLNaGHrFEwu") %>% 
   filter(completed == "True", user.userType == "student") %>% 
   left_join(df.grade %>% 
   select(assessmentPid, grade) %>% 
@@ -71,28 +98,6 @@ df.valid.runs.selected.p2 <- df.valid.runs.selected %>%
   filter(!is.na(scores.computed.aiV1P2.sreScore)) 
 ```
 
-
-```{r}
-ggplot(df.valid.runs.selected.p1, mapping = aes(y = scores.computed.aiV1P1.sreScore,
-                     x = scores.computed.lab.sreScore)) + 
-  facet_wrap(~grade) +
-  geom_point(alpha=0.5, size = 0.2) +
-  geom_abline(slope=1,intercept = 0) +
-  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
-  geom_point(aes(color=grade)) + ggtitle('SRE vs. AI parallel 1') +
-  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
-
-ggplot(df.valid.runs.selected.p2, mapping = aes(y = scores.computed.aiV1P2.sreScore,
-                     x = scores.computed.lab.sreScore)) + 
-  facet_wrap(~grade) +
-  geom_point(alpha=0.5, size = 0.2) +
-  geom_abline(slope=1,intercept = 0) +
-  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
-  geom_point(aes(color=grade)) + ggtitle('SRE vs. AI parallel 2') +
-  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) 
-```
-
-
 ```{r}
 df.valid.runs.selected.combined <- df.valid.runs.selected.p1 %>% 
   mutate(ai_score = scores.computed.aiV1P1.sreScore, form = "AI-Form 1") %>% 
@@ -100,30 +105,40 @@ df.valid.runs.selected.combined <- df.valid.runs.selected.p1 %>%
   mutate(ai_score = scores.computed.aiV1P2.sreScore, form = "AI-Form 2"))
 ```
 ```{r}
-
 t.test( df.valid.runs.selected.combined$ai_score,  df.valid.runs.selected.combined$scores.computed.lab.sreScore)
 ```
+```{r}
+df.valid.runs.selected.combined.updated <- df.additional.combined %>% 
+  pivot_wider(names_from = corpusId, values_from = totalScore) %>% 
+  rename(grade = user.grade, scores.computed.lab.sreScore = lab) %>% 
+  mutate(ai_score = ifelse(!is.na(aiV1P1), aiV1P1, aiV1P2)) %>% 
+  mutate(form = ifelse(!is.na(aiV1P1),"AI-Form 1", "AI-Form 2")) %>% 
+  select(user.assessmentPid, runId,  grade,scores.computed.lab.sreScore, ai_score, form) %>% 
+  rbind(df.valid.runs.selected.combined %>% 
+  select(user.assessmentPid, runId,  grade,scores.computed.lab.sreScore, ai_score, form))
+```
+
 grade distribution
 ```{r}
-df.valid.runs.selected.combined %>% 
+df.valid.runs.selected.combined.updated %>% 
   group_by(grade) %>% 
   tally()
 ```
 
 
 ```{r}
-df.valid.runs.selected.combined %>% 
+df.valid.runs.selected.combined.updated %>% 
   group_by(form) %>% 
   summarise(n= n(), mean(ai_score), mean(scores.computed.lab.sreScore), sd(ai_score), sd(scores.computed.lab.sreScore))
 ```
 
 ```{r}
-g.sre.ai.compare <- ggplot(df.valid.runs.selected.combined, mapping = aes(y = ai_score,
+g.sre.ai.compare <- ggplot(df.valid.runs.selected.combined.updated, mapping = aes(y = ai_score,
                      x = scores.computed.lab.sreScore)) + 
   facet_wrap(~form) +
   xlim(-30, 130) + 
   ylim(-30, 130) +
-  labs(x = "ROAR-SRE Lab Form", 
+  labs(x = "ROAR-SRE Fixed Form", 
        y = "AI Parallel Form") + 
   coord_equal() +
   geom_abline(slope=1,intercept = 0) +
@@ -131,6 +146,7 @@ g.sre.ai.compare <- ggplot(df.valid.runs.selected.combined, mapping = aes(y = ai
   geom_point(aes(color=grade), alpha = 0.7, size = 1) + 
   scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
 g.sre.ai.compare
+
 ```
 
 ```{r}
@@ -138,3 +154,14 @@ ggsave('../figures/SRE-AI.pdf', g.sre.ai.compare)
 ggsave('../figures/SRE-AI.png', g.sre.ai.compare)
 ```
 
+## grade level 
+```{r}
+ggplot(df.valid.runs.selected.combined.updated, mapping = aes(y = ai_score,
+                     x = scores.computed.lab.sreScore)) + 
+  facet_wrap(~grade) +
+  geom_point(alpha=0.5, size = 0.2) +
+  geom_abline(slope=1,intercept = 0) +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  geom_point(aes(color=grade)) + ggtitle('SRE vs. AI Form') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+```
