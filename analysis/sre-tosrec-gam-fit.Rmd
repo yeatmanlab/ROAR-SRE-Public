@@ -1,0 +1,106 @@
+---
+title: "SRE_TOSREC_GAM"
+output:
+  html_document: default
+  pdf_document: default
+date: "2023-05-22"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyr)
+library(dplyr)
+library(mgcv)
+library(ggplot2)
+library(ggpubr)
+library(pracma)
+library(equate)
+library(viridis)
+library(gratia)
+library(lubridate)
+library(tidygam)
+```
+
+```{r SRE-data-prep}
+# Data location: https://drive.google.com/drive/u/1/folders/0AAol-yxLe1sfUk9PVA
+df <- read.csv('~/Documents/roar-analysis/data/sre-paper-data/study2_sre_tosrec_gam.csv')
+#df <- read.csv('~/Documents/ROAR-Research-Data/sre-dataset-06-05-23.csv')
+
+head(df)
+print(dim(df))
+
+# remove NaN rows
+df <- filter(df, !is.na(grade))
+df <- filter(df, !is.na(lab.raw.score))
+df <- filter(df, !is.na(tosrec.raw.score))
+df <- filter(df, grade<=8)
+print(dim(df))
+#df <- filter(df, tosrec.grade.response == grade)
+ggplot(df, aes(x=grade,y=tosrec.grade.response))+
+  geom_bin_2d() + scale_fill_viridis(option ='magma',direction=-1) + scale_x_continuous(breaks = c(1:12)) +
+  scale_y_continuous(breaks = c(1:12))
+print(dim(df))
+```
+
+```{r SRE-Fit-GAM-LOESS}
+# Fit GAM to SRE data
+gr.gam <- gam(equivalent.tosrec.ss ~ te(lab.raw.score, tosrec.grade.response,k=3), bs='tp', data=df, method='REML')
+# Fit local regression model
+gr.loess <- loess(equivalent.tosrec.ss ~ lab.raw.score*tosrec.grade.response, data=df)
+summary(gr.gam)
+summary(gr.loess)
+
+# Prediciton for each data point
+df$predicted.tosrec.gam <- predict(gr.gam,df)
+df$predicted.tosrec.loess <- predict(gr.loess,df)
+sprintf('GAM prediciton is correlated with TOSREC SS at r= %f', cor(df$predicted.tosrec.gam,df$equivalent.tosrec.ss, use="pairwise.complete.obs"))
+sprintf('LOESS prediciton is correlated with TOSREC SS at r= %f', cor(df$predicted.tosrec.loess,df$equivalent.tosrec.ss, use="pairwise.complete.obs"))
+
+# plot gam prediction
+
+g1 = ggplot(df, aes(predicted.tosrec.gam,equivalent.tosrec.ss,color=tosrec.grade.response))+
+  geom_abline(slope=1,intercept = 0) +
+  geom_point(alpha=0.5) +
+  facet_wrap(vars(tosrec.grade.response),nrow=2) + stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  xlim(50,145) + ylim(50,145) + theme(aspect.ratio=1) +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'), name='Grade')+
+  xlab('ROAR-SRE Standard Score') + ylab('TOSREC Standard Score')
+# plot loess prediction
+g2 = ggplot(df, aes(predicted.tosrec.loess,equivalent.tosrec.ss,color=tosrec.grade.response))+
+  geom_point() +
+  facet_wrap(vars(tosrec.grade.response),nrow=2) + stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  xlim(50,145) + ylim(50,145) + theme(aspect.ratio=1)  +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+g1
+g2
+ggsave('figures/SRE-TOSREC.png',g1,dpi=300)
+```
+
+
+```{r SRE-TOSRECT-Lookup-Table}
+# Density of TOSREC scores by grade
+ggplot(df, aes(x=equivalent.tosrec.ss,group=tosrec.grade.response)) +
+  geom_density(aes(color=tosrec.grade.response))+
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+ggplot(df, aes(x=lab.raw.score,group=tosrec.grade.response)) +
+  geom_density(aes(color=tosrec.grade.response))+
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+
+# Evaluate the model for each tosrec+grade combination
+grid <- meshgrid(x=1:8,y=0:120)
+X<- tibble(tosrec.grade.response = as.vector(grid$X))
+X$lab.raw.score <- as.vector(grid$Y)
+X$equivalent.tosrec.ss.gam <- predict(gr.gam, X)
+X$equivalent.tosrec.ss.loess <- predict(gr.loess, X)
+
+# Make a plot of the GAM and the loess equate
+ggplot(X, aes(x=lab.raw.score, y=equivalent.tosrec.ss.gam, group=tosrec.grade.response))+
+  geom_line(aes(color=tosrec.grade.response)) + xlim(0,125) + ylim(50,145) + ggtitle('GAM Prediction') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+
+ggplot(X, aes(x=lab.raw.score, y=equivalent.tosrec.ss.loess, group=tosrec.grade.response))+
+  geom_line(aes(color=tosrec.grade.response)) + xlim(0,125) + ylim(50,145) + ggtitle('LOESS Prediction') +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1'))
+```
+
+

@@ -375,17 +375,23 @@ Figure 3: Scatter plot of SRE-Pilot vs. SRE-Fixed vs. TOSREC
 ```{r}
 df.scatter.plot <- df.sre.tosrec.scores
 
-ggplot(df.scatter.plot, mapping = aes(x = labFinalScore, y = tosrecFinalScore)) + 
+pilot.fixed.scatter <- ggplot(df.scatter.plot, mapping = aes(x = labFinalScore, y = tosrecFinalScore)) + 
   geom_point(size = 1.5, color = "gray20") +
   geom_smooth(method = "lm", color="black") +
-  facet_wrap(~labCorpus) +
+  facet_wrap(~~fct_rev(labCorpus)) +
   stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), color = "black", 
            geom = "label", hjust = -0.3, vjust = 1) +
   labs(x = "SRE Score (correct - incorrect)",
        y = "TOSREC Score (correct - incorrect)",
        color = "SRE Form") + 
   theme_light() +
-  theme(text=element_text(family="Avenir", size=12), strip.text = element_text(colour = 'black'))
+  theme(text=element_text(family="Avenir", size=12),
+        axis.title = element_text(face = "bold"),
+        strip.text = element_text(colour = 'black'), 
+        strip.background = element_rect(fill="gray85"),
+        aspect.ratio = 5/4)
+
+pilot.fixed.scatter
 ```
 
 ### Matching items based on easy, medium, and hard difficulty
@@ -544,4 +550,9 @@ medium.final <- df.lab.items.medium.final[medium.length,] %>%
 hard.length <- sample(nrow(df.lab.items.hard.final))
 hard.final <- df.lab.items.hard.final[hard.length,] %>%
   mutate(difficulty = "Hard")
+```
+
+# Run this chunk to save the plots 
+```{r}
+ggsave('figures/SRE-Fixed-Pilot-Scatter.png', pilot.fixed.scatter, dpi=300)
 ```
