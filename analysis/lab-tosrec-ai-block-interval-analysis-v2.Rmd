@@ -26,10 +26,14 @@ library(plyr)
 library(ggplot2)
 library(viridis)
 library(ggsci)
+```
+
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
 library(wesanderson)
 library(dplyr)
 library(plotrix)
-opts_knit$set(root.dir = "~/Documents/Code/ROAR_organizer/ROAR-Score/")
+opts_knit$set(root.dir = "~/Documents/roar-analysis")
 ```
 
 ## Settings
@@ -40,14 +44,9 @@ opts_chunk$set(comment = "")
 options(dplyr.summarise.inform = F)
 ```
 
-## Functions
-```{r}
-correlate_rows <- function(x, y) {
-  cor(x, y)
-}
-```
-
 # Data 
+
+## Data location: https://drive.google.com/drive/u/1/folders/0AAol-yxLe1sfUk9PVA
 
 ## Data Loading (jsPsych Raw Trials)
 ```{r}
@@ -65,18 +64,25 @@ df.cleaned <- df.raw %>%
 ```
 
 ```{r}
-df.not.guessing <- df.cleaned %>%
-  group_by(pid, runId) %>%
-  dplyr::summarise(medianRT = median(rt)) %>%
-  filter(medianRT > 500) %>%
-  mutate(keep = 1)
+df.guessing <- df.cleaned %>%
+  group_by(pid, runId, blockId) %>%
+  dplyr::summarise(median.rt = median(rt),
+                   mean.rt = mean(rt),
+                   correct = sum(correct),
+                   attempted = n(), 
+                   incorrect = attempted - correct, 
+                   pCorr = correct/attempted) %>%
+  filter((median.rt <= 1000 | median.rt >= 20000) & pCorr <= 0.65) %>%
+  select(pid, runId) %>%
+  mutate(remove = 1) %>% 
+  unique()
 ```
 
 ```{r}
 df.keep <- df.cleaned %>%
-  left_join(df.not.guessing, by=c("pid", "runId")) %>%
-  filter(keep == 1) %>%
-  select(-keep)
+  left_join(df.guessing, by=c("pid", "runId")) %>%
+  filter(is.na(remove)) %>%
+  select(-remove)
 ```
 
 ```{r}
@@ -120,14 +126,15 @@ df.analysis <- rbind(df.keep.v2, df.keep.v3)
 ```{r}
 df.init.time <- df.analysis %>% 
   filter(trialNumBlock == 1) %>% 
-  select(pid, runId, corpusId, time_elapsed) %>% 
-  dplyr :: rename(init_time = time_elapsed) 
+  select(pid, runId, corpusId, time_elapsed, rt) %>%
+  mutate(init_time = time_elapsed -  rt) %>%
+  select(-time_elapsed, -rt)
 ```
 
 ```{r}
 df.block.time <- df.analysis %>% 
-  select(pid, runId, gradeResponse, corpusId, blockId, itemId, correct, rt,  time_elapsed) %>% 
-  left_join(df.init.time, by = c("pid", "runId", "corpusId")) %>% 
+  select(pid, runId, gradeResponse, corpusId, blockId, itemId, correct, time_elapsed, rt) %>% 
+  left_join(df.init.time, by = c("pid", "runId", "corpusId")) %>%
   mutate(minus_time = time_elapsed - init_time) %>% 
   mutate(part = as.numeric(case_when(
     minus_time <= 90000 ~ 90,
@@ -137,11 +144,27 @@ df.block.time <- df.analysis %>%
   mutate(correct_new = ifelse(correct == 0, -1, 1))
 ```
 
+```{r}
+df.sample.size <-  df.block.time %>%
+  select(pid) %>%
+  unique() %>%
+  tally()
+```
+
+```{r}
+df.school.sample <-  df.block.time %>%
+  select(pid) %>%
+  mutate(school = str_extract(pid, "[^-]+")) %>%
+  select(school) %>%
+  unique()
+```
+
 ## Creating Reference Data Frame to Set Intervals for Block Timing 
 ```{r}
 list <- seq(0, 180000, by = 10000)
 
 intervals.ref <- data.frame(tibble(interval = list))
+
 full.int.df <- df.block.time %>%
   dplyr::rename(seconds_elapsed = minus_time) %>%
   group_by(pid, runId, blockId, seconds_elapsed) %>%
@@ -171,10 +194,11 @@ df.lab.int <- df.block.time %>%
 ```{r}
 df.lab.int.v1 <- df.lab.int %>%
   right_join(full.int.df, by=c("pid", "runId", "blockId", "seconds_elapsed")) %>%
-  mutate(diff = interval - seconds_elapsed) %>%
+  mutate(diff = abs(interval - seconds_elapsed)) %>%
   filter(diff >= 0, blockId == "lab") %>%
-  group_by(pid, runId, interval) %>% 
+  group_by(pid, runId, interval) %>%
   slice_min(diff) %>%
+  distinct(runId, interval, diff, .keep_all = TRUE) %>%
   dplyr::rename("labSecondsElapsed" = seconds_elapsed) %>%
   ungroup()
 ```
@@ -210,10 +234,11 @@ df.tosrec.int <- df.block.time %>%
 ```{r}
 df.tosrec.int.v1 <- df.tosrec.int %>%
   right_join(full.int.df, by=c("pid", "runId", "blockId", "seconds_elapsed")) %>%
-  mutate(diff = interval - seconds_elapsed) %>%
+  mutate(diff = abs(interval - seconds_elapsed)) %>%
   filter(diff >= 0, blockId == "tosrec") %>%
   group_by(pid, runId, interval) %>% 
   slice_min(diff) %>%
+  distinct(runId, interval, diff, .keep_all = TRUE) %>%
   dplyr::rename("tosrecSecondsElapsed" = seconds_elapsed) %>%
   ungroup()
 ```
@@ -249,10 +274,11 @@ df.ai.int <- df.block.time %>%
 ```{r}
 df.ai.int.v1 <- df.ai.int %>%
   right_join(full.int.df, by=c("pid", "runId", "blockId", "seconds_elapsed")) %>%
-  mutate(diff = interval - seconds_elapsed) %>%
+  mutate(diff = abs(interval - seconds_elapsed)) %>%
   filter(diff >= 0, blockId == "ai") %>%
   group_by(pid, runId, interval) %>% 
   slice_min(diff) %>%
+  distinct(runId, interval, diff, .keep_all = TRUE) %>%
   dplyr::rename("aiSecondsElapsed" = seconds_elapsed) %>%
   ungroup()
 ```
@@ -320,7 +346,8 @@ df.lab.tosrec.grade <- df.lab.int.final %>%
   merge(df.tosrec.int.final, by=c("pid", "runId", "interval", "grade")) %>%
   select(pid, runId, grade, labScore, labScore180, tosrecScore, tosrecScore180,
          labSecondsElapsed, tosrecSecondsElapsed, interval) %>%
-  group_by(interval, grade) %>%
+  mutate(gradeGroups = ifelse(grade <= 4, "Lower School", "Upper School")) %>%
+  group_by(interval, gradeGroups) %>%
   reframe(equalCorr = cor(labScore, tosrecScore),
           oneThreeCorr = cor(labScore, tosrecScore180),
           n = n(), 
@@ -345,7 +372,8 @@ df.lab.ai.grade <- df.lab.int.final %>%
   merge(df.ai.int.final, by=c("pid", "runId", "interval", "grade")) %>%
   select(pid, runId, grade, labScore, labScore180, aiScore, aiScore180,
          labSecondsElapsed, aiSecondsElapsed, interval) %>%
-  group_by(interval, grade) %>%
+  mutate(gradeGroups = ifelse(grade <= 4, "Lower School", "Upper School")) %>%
+  group_by(interval, gradeGroups) %>%
   reframe(equalCorr = cor(labScore, aiScore),
           oneThreeCorr = cor(labScore180, aiScore),
           n = n(), 
@@ -386,9 +414,8 @@ ggplot(df.lab.ai.demo, aes(x = grade, y = n, fill = grade)) +
 ggplot(df.lab.tosrec.int, mapping = aes(x = interval,
                      y = oneThreeCorr)) + 
   geom_point(color="gray21") + 
-  labs(title = "Lab-TOSREC Correlation vs. Time Elasped", 
-       x = "Time Elasped (in seconds)",
-       y = "SRE - TOSREC (3 minutes) Correlation") +
+  labs(x = "SRE time elapsed (s)",
+       y = "Correlation of SRE - TOSREC") +
   geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
   geom_smooth(method = "loess", color="darkseagreen", se=F) +
   scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,10000), labels=seq(0, 180, by=10)) +
@@ -399,9 +426,8 @@ ggplot(df.lab.tosrec.int, mapping = aes(x = interval,
 ggplot(df.lab.ai.int, mapping = aes(x = interval,
                      y = oneThreeCorr)) + 
   geom_point(color="gray21") + 
-  labs(title = "Lab-AI Correlation vs. Time Elasped", 
-       x = "Time Elasped (in seconds)",
-       y = "Lab (3 minutes) - AI Correlation") +
+  labs(x = "SRE time elapsed (s)",
+       y = "Correlation of SRE - AI") +
   geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
   geom_smooth(method = "loess", color="darkseagreen", se=F) +
   scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,10000), labels=seq(0, 180, by=10)) +
@@ -412,33 +438,50 @@ ggplot(df.lab.ai.int, mapping = aes(x = interval,
 
 ## Inspecting Lab-TOSREC-AI correlations against block time in 10 second intervals (with Grade Response)
 ```{r}
-ggplot(df.lab.tosrec.grade, mapping = aes(x = interval,
-                     y = oneThreeCorr, color=grade)) + 
-  labs(title = "Lab-TOSREC Correlation vs. Time Elasped", 
-       x = "Time Elasped (in seconds)",
-       y = "SRE - TOSREC (3 minutes) Correlation") +
-  facet_wrap(~grade) +
-  scale_color_manual(name = "Grade", values = wes_palette("Zissou1", n = 8, type = "continuous")) +
+lab.tosrec.int.plot <- ggplot(df.lab.tosrec.grade, mapping = aes(x = interval, y = oneThreeCorr, color=gradeGroups)) + 
+  labs(x = "Time elasped (seconds)",
+       y = "SRE - TOSREC (3 minutes) correlation") +
+  facet_wrap(~gradeGroups) +
+  geom_text(aes(family=c("Avenir"), label=paste("n =", n)), color="black", x=135000, y=0.1) +
+  scale_fill_manual(values = c( 'dodgerblue1','firebrick1','goldenrod1')) +
   geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
   geom_smooth(method = "loess", se=F) +
-  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,30000), labels=seq(0, 180, by=30)) +
+  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000, 60000), labels=seq(0, 180, by=60)) +
   scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.2)) +
   theme_light() +
-  theme(text=element_text(family="Avenir", size=12)) 
+  theme(text=element_text(family="Avenir", size=14), 
+        legend.position = "none",
+        axis.title = element_text(face = "bold"),
+        strip.text = element_text(colour = 'black'),
+        strip.background = element_rect(fill="gray85"),
+        aspect.ratio = 6/4.5)
 
-ggplot(df.lab.ai.grade, mapping = aes(x = interval,
-                     y = oneThreeCorr, color=grade)) + 
-  labs(title = "Lab-AI Correlation vs. Time Elasped", 
-       x = "Time Elasped (in seconds)",
+lab.ai.int.plot <- ggplot(df.lab.ai.grade, mapping = aes(x = interval, y = oneThreeCorr, color=gradeGroups)) + 
+  labs(x = "Time Elasped (seconds)",
        y = "Lab (3 minutes) - AI Correlation") +
-  facet_wrap(~grade) +
-  scale_color_manual(name = "Grade", values = wes_palette("Zissou1", n = 8, type = "continuous")) +
+  facet_wrap(~gradeGroups) +
+  geom_text(aes(family=c("Avenir"), label=paste("n =", n)), x=135000, y=0.1) +
+  scale_fill_manual(values = c( 'dodgerblue1','firebrick1','goldenrod1')) +
   geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
   geom_smooth(method = "loess", se=F) +
-  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,30000), labels=seq(0, 180, by=30)) +
+  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,60000), labels=seq(0, 180, by=60)) +
   scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.2)) +
   theme_light() +
-  theme(text=element_text(family="Avenir", size=12)) 
+  theme(text=element_text(family="Avenir", size=14), 
+        legend.position = "none",
+        axis.title = element_text(face = "bold"),
+        strip.text = element_text(colour = 'black'),
+        strip.background = element_rect(fill="gray85"),
+        aspect.ratio = 6/4.5)
+
+lab.tosrec.int.plot
+lab.ai.int.plot
+```
+
+# Run this chunk to save the plots 
+```{r}
+ggsave('figures/SRE-TOSREC-Interval.png', lab.tosrec.int.plot, dpi=300)
+ggsave('figures/SRE-AI-Interval.png', lab.ai.int.plot, dpi=300)
 ```
 
 ```{r}
