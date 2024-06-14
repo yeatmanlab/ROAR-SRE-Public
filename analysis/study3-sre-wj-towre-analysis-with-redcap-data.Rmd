@@ -1,0 +1,499 @@
+---
+title: "ROAR-SRE-WJ-Analysis"
+author: "Jasmine Tran"
+date:  "`r Sys.Date()`"
+output:
+  bookdown::html_document2:
+    toc: true
+    toc_depth: 4
+    theme: cosmo
+    highlight: tango
+---
+
+# Load Packages
+
+Let's first load the packages that we need for this chapter.
+
+```{r, message=FALSE, warning = FALSE, echo = FALSE}
+library(knitr)
+library(stringr)
+library(ggpubr)
+library(mirt)
+library(kableExtra)
+library(tidyverse)
+library(purrr)
+library(plyr)
+library(ggplot2)
+library(viridis)
+library(ggsci)
+library(wesanderson)
+library(dplyr)
+library(plotrix)
+library(reshape2)
+library(gridExtra)
+opts_knit$set(root.dir = "~/Documents/roar-analysis")
+```
+
+## Settings
+```{r echo = FALSE}
+# sets how code looks in knitted document
+opts_chunk$set(comment = "")
+# suppresses warning about grouping 
+options(dplyr.summarise.inform = F)
+```
+
+## Functions 
+```{r}
+# function to get upper triangle (?)
+get_upper_tri = function(cormat) {
+  cormat[lower.tri(cormat)] = NA
+  return(cormat) }
+```
+
+# Data 
+
+## Data location: https://drive.google.com/drive/u/1/folders/0AAol-yxLe1sfUk9PVA
+
+## Data Loading (other Stanford participants)
+```{r}
+# data from study 1 (Stanford participants)
+df.legacy.sre.raw <- read.csv("~/Documents/roar-analysis/data/prod_legacy_sre_raw_trials.csv")
+
+df.va.wj.raw <- read.csv("~/Documents/roar-analysis/data/visualAttentionSRFValidationData.csv") %>%
+  mutate(mffScore = NA) %>%
+  select(pid, "years" = visit_age_yrs, "grade" = visit_grade, 
+         "srfCorrect" = wj_srf_correct_raw, "srfIncorrect" = wj_srf_incorrect_raw,
+         mffScore)
+
+df.stanford.wj.raw <- read.csv("~/Documents/roar-analysis/data/lmb_F1_C3_wj_srf_data.csv") %>%
+  select(-redcapId) %>%
+  rbind(df.va.wj.raw)
+```
+
+## Data Loading (BRSSD participants)
+```{r}
+# data from study 2 (brssd validation)
+df.brs.sre.raw <- read.csv("~/Documents/roar-analysis/data/brs_sre_data_trials_fall_23.csv")
+df.brs.wj.raw <- read.csv("~/Documents/roar-analysis/data/brs_fall_23_validation_data.csv")
+```
+
+## Data Cleaning & Wrangling
+
+### Processing raw SRE trials from JsPsych
+```{r}
+# filtering for completed runs and the correct participants
+df.stanford.sre.cleaned <- df.legacy.sre.raw %>% 
+  filter(grepl("rc-", pid), 
+         task == "test_response", 
+         completed == "true") %>% 
+  mutate(correct = as.numeric(correct),
+         gradeResponse = str_extract(userInfo, '(?<="grade":")[^"]+'))
+```
+
+```{r}
+# filtering for completed runs and the correct participants
+df.brs.sre.cleaned <- df.brs.sre.raw %>% 
+  select(-pid) %>%
+  dplyr::rename("pid" = user.assessmentPid) %>%
+  filter(grepl("brs-", pid), 
+         completed == "True",
+         corpusId != "practice")
+```
+
+```{r}
+# determining which participants are guessing with low accuracy and very fast response times
+df.stanford.sre.guessing <- df.stanford.sre.cleaned %>%
+  group_by(pid, runId, blockId) %>%
+  dplyr::summarise(medianRT = median(rt),
+                   correct = sum(correct),
+                   attempted = n(), 
+                   incorrect = attempted - correct, 
+                   pCorr = correct/attempted) %>%
+  filter((medianRT <= 1000 | medianRT >= 20000) & pCorr <= 0.65) %>%
+  select(pid, runId) %>%
+  mutate(remove = 1) %>%
+  unique() %>%
+  ungroup() 
+```
+
+```{r}
+# determining which participants are guessing with low accuracy and very fast response times
+df.brs.sre.guessing <- df.brs.sre.cleaned %>%
+  group_by(pid, runId, corpusId) %>%
+  dplyr::summarise(medianRT = median(rt),
+                   correct = sum(correct),
+                   attempted = n(), 
+                   incorrect = attempted - correct, 
+                   pCorr = correct/attempted) %>%
+  filter((medianRT <= 1000 | medianRT >= 20000) & pCorr <= 0.65) %>%
+  select(pid, runId) %>%
+  mutate(remove = 1) %>%
+  unique() %>%
+  ungroup()
+```
+
+```{r}
+# filtering out guessing participants
+df.stanford.sre.runs <- df.stanford.sre.cleaned %>%
+  left_join(df.stanford.sre.guessing, by=c("pid", "runId")) %>%
+  filter(is.na(remove)) %>%
+  select(-remove) %>%
+  mutate(source = "Stanford") %>%
+  select(pid, runId, blockId, corpusId, gradeResponse,
+         trialNumBlock, trial_index, time_elapsed,
+         item, rt, correct, source)
+```
+
+```{r}
+# filtering out guessing participants
+df.brs.sre.runs <- df.brs.sre.cleaned %>%
+  left_join(df.brs.sre.guessing, by=c("pid", "runId")) %>%
+  filter(is.na(remove)) %>%
+  select(-remove) %>%
+  mutate(source = "BRSSD") %>%
+  select(pid, runId, "blockId" = subtask, corpusId, 
+         "gradeResponse" = user.grade,
+         trialNumBlock, trial_index, time_elapsed,
+         item, rt, correct, source)
+```
+
+### Merging the SRE data for LMB and BRSSD participants
+```{r}
+df.combined.sre.runs <- rbind(df.brs.sre.runs, df.stanford.sre.runs)
+```
+
+```{r}
+df.school.demo <- df.combined.sre.runs %>%
+  mutate(schoolPrefix = str_extract(pid, "(?<=-)[^-]+")) %>%
+  select(schoolPrefix) %>%
+  unique()
+```
+
+## Processing combined dataframe for timing analysis
+```{r}
+df.init.time <- df.combined.sre.runs %>% 
+  filter(trialNumBlock == 1) %>% 
+  select(pid, runId, corpusId, time_elapsed) %>% 
+  dplyr :: rename(init_time = time_elapsed) 
+```
+
+```{r}
+df.block.time <- df.combined.sre.runs %>% 
+  select(pid, runId, gradeResponse, corpusId, blockId, item, correct, rt, time_elapsed, source) %>% 
+  left_join(df.init.time, by = c("pid", "runId", "corpusId")) %>% 
+  mutate(minus_time = time_elapsed - init_time) %>% 
+  mutate(part = as.numeric(case_when(
+    minus_time <= 90000 ~ 90,
+    minus_time > 90000 & minus_time < 120000 ~ 120,
+    minus_time >= 120000 ~ 180))) %>%
+  mutate(correct_new = ifelse(correct == 0, -1, 1))
+```
+
+```{r}
+# checking sample size
+df.block.time %>%
+  select(pid) %>%
+  unique() %>%
+  tally()
+```
+
+## Creating reference dataframe to set intervals for block timing 
+```{r}
+list <- seq(0, 180000, by = 10000)
+
+intervals.ref <- data.frame(tibble(interval = list))
+
+full.int.df <- df.block.time %>%
+  dplyr::rename(seconds_elapsed = minus_time) %>%
+  group_by(pid, runId, blockId, seconds_elapsed) %>%
+  tally() %>% 
+  select(-n) %>%
+  merge(intervals.ref, all = TRUE)
+```
+
+```{r}
+df.aiP1.scores <- df.block.time %>%
+  select(pid, runId, blockId, correct_new, time_elapsed) %>%
+  filter(blockId == "aiV1P1") %>%
+  group_by(pid, runId, blockId) %>%
+  reframe(aiP1Score = cumsum(correct_new),
+          time_elapsed = time_elapsed) %>%
+  group_by(pid, runId, blockId) %>%
+  slice_max(time_elapsed) %>%
+  ungroup() %>%
+  select(pid, aiP1Score)
+```
+
+```{r}
+df.aiP2.scores <- df.block.time %>%
+  select(pid, runId, blockId, correct_new, time_elapsed) %>%
+  filter(blockId == "aiV1P2") %>%
+  group_by(pid, runId, blockId) %>%
+  reframe(aiP2Score = cumsum(correct_new),
+          time_elapsed = time_elapsed) %>%
+  group_by(pid, runId, blockId) %>%
+  slice_max(time_elapsed) %>%
+  ungroup() %>%
+  select(pid, aiP2Score)
+```
+
+## Augmenting data for SRE form into 10 Second Intervals
+```{r}
+df.timing.int <- df.block.time %>%
+  select(pid, runId, gradeResponse, blockId, correct, correct_new, minus_time) %>%
+  filter(blockId == "lab") %>%
+  group_by(pid, runId, blockId) %>%
+  dplyr::arrange(minus_time, .by_group = T) %>%
+  reframe(seconds_elapsed = minus_time,
+         sreScore = cumsum(correct_new))
+```
+
+```{r}
+df.int.v1 <- df.timing.int %>%
+  right_join(full.int.df, by=c("pid", "runId", "blockId", "seconds_elapsed")) %>%
+  mutate(diff = interval - seconds_elapsed) %>%
+  filter(diff >= 0, blockId == "lab") %>%
+  group_by(pid, runId, interval) %>% 
+  slice_min(diff) %>%
+  dplyr::rename("secondsElapsed" = seconds_elapsed) %>%
+  ungroup()
+```
+
+```{r}
+df.180.score <- df.int.v1 %>%
+  filter(interval == 180000) %>%
+  select(pid, runId, "sreScore180" = sreScore) %>%
+  mutate(source = ifelse(grepl("brs", pid), "BRSSD", "LMB")) 
+```
+
+```{r}
+df.int.final <- df.int.v1 %>%
+  left_join(df.180.score, by=c("pid", "runId")) 
+```
+
+```{r}
+df.int.final
+```
+
+## Cleaning up validation data frames (WJ & TOWRE)
+
+### Removing unused columns from validation assessment dataframes
+```{r}
+df.stanford.wj.cleaned <- df.stanford.wj.raw %>%
+  mutate(lwidRaw = NA, waRaw = NA, brs = NA,
+         sweRaw = NA, pdeRaw = NA)
+```
+
+```{r}
+df.brs.wj.cleaned <- df.brs.wj.raw %>%
+  select(-date, -months, -ends_with("Perc"), -ends_with("SS")) %>%
+  mutate(mffScore = NA)
+```
+
+### Merging the WJ/TOWRE data for LMB and BRSSD participants
+```{r}
+df.combined.wj.scores <- rbind(df.stanford.wj.cleaned, df.brs.wj.cleaned) %>%
+  mutate(srfScore = srfCorrect - srfIncorrect) %>%
+  select(-srfCorrect, -srfIncorrect)
+```
+
+### Combining SRE and WJ/TOWRE scores for final analysis dataframe
+```{r}
+df.sre.validation.analysis <- df.int.final %>%
+  left_join(df.combined.wj.scores, by="pid") %>%
+  filter(!is.na(srfScore))
+```
+
+## Combining SRE & WJ SRF data frame for interval analysis
+```{r}
+df.sre.srf.int <- df.int.final %>%
+  select(pid, runId, sreScore, sreScore180,
+         secondsElapsed, interval) %>%
+  left_join(df.combined.wj.scores, by = "pid") %>%
+  filter(!is.na(srfScore)) %>%
+  dplyr::group_by(interval) %>%
+  reframe(oneThreeCorr = cor(srfScore, sreScore),
+          n = n(), 
+          standardError = sqrt((1 - oneThreeCorr^2) / (n - 2)),
+          errorBarsMax = oneThreeCorr + standardError,
+          errorBarsMin = oneThreeCorr - standardError) %>% 
+  mutate(errorBarsMaxAdj = ifelse(errorBarsMax > 1.00, 1.00, errorBarsMax))
+```
+
+### Creating data frames for correlations plots (both 1-1 and heat matrix)
+```{r}
+df.corr.plot <- df.sre.validation.analysis %>%
+  select(pid, "age" = years, grade, 
+         "sreScore" = sreScore180, lwidRaw, waRaw, srfScore,
+         brs, sweRaw, pdeRaw, source) %>% 
+  unique()
+```
+
+```{r}
+df.corr.matrix <- df.corr.plot %>%
+  left_join(df.aiP1.scores, by="pid") %>%
+  left_join(df.aiP2.scores, by="pid") %>%
+  select(-c(pid, age, grade, source)) 
+
+# compute correlations
+cor.matrix <- stats::cor(df.corr.matrix, use = "pairwise.complete.obs")
+
+# melt the correlation matrix
+df.melted.corr.matrix <- melt(get_upper_tri(cor.matrix), na.rm = TRUE)
+```
+
+### Dataframe with mean and standard deviation for all the assessments
+```{r}
+df.corr.matrix %>%
+  dplyr::summarise(sreMean = mean(sreScore),
+                   sreSD = sd(sreScore),
+                   srfMean = mean(srfScore),
+                   srfSD = sd(srfScore),
+                   lwidMean = mean(lwidRaw, na.rm = TRUE),
+                   lwidSD = sd(lwidRaw, na.rm = TRUE),
+                   waMean = mean(waRaw, na.rm = TRUE),
+                   waSD = sd(waRaw, na.rm = TRUE),
+                   sweMean = mean(sweRaw, na.rm = TRUE),
+                   sweSD = sd(sweRaw, na.rm = TRUE),
+                   pdeMean = mean(pdeRaw, na.rm = TRUE),
+                   pdeSD = sd(pdeRaw, na.rm = TRUE))
+```
+
+### Making a dataframe with the sample size for the plots
+```{r}
+sre.wj.corr.labels <- df.corr.plot %>%
+  select(pid, source) %>%
+  group_by(source) %>%
+  tally() 
+
+df.corr.plot <- df.corr.plot %>%
+  left_join(sre.wj.corr.labels, by="source")
+```
+
+# Data Visualizations
+
+## Figure 6: Inspecting SRE vs. WJ SRF correlations 
+```{r}
+school.sre.wj.corr.plot <- ggplot(df.corr.plot %>%
+                                    filter(source == "BRSSD") %>%
+                                    mutate(grade = ifelse(grade > 8, 8, grade)),
+                                  mapping = aes(x = sreScore, y = srfScore)) + 
+  geom_point(color="#d66f8f") + 
+  facet_grid(. ~ "3rd grade public school") +
+  labs(x = "SRE-Human score",
+       y = "WJ-SRF score") +
+  geom_smooth(method = "lm", color="black") +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), label.y=108, color="black") +
+  geom_text(aes(label=paste('n =', n)), 
+            data=filter(sre.wj.corr.labels, source=="BRSSD"),
+            x=5, y=98, vjust=0, hjust=0) +
+  coord_cartesian(ylim=c(0, 120)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12),
+        legend.position = "none",
+        strip.text = element_text(colour = 'black'),
+        strip.background = element_rect(fill="gray85"))
+
+stanford.sre.wj.corr.plot <- ggplot(df.corr.plot %>%
+                                 filter(source == "LMB"), 
+                                 mapping = aes(x = sreScore, y = srfScore)) + 
+  geom_point(aes(color = grade)) + 
+  facet_grid(. ~ "Dyslexia study") +
+  labs(x = "SRE-Human score",
+       y = "WJ-SRF score") +
+  geom_smooth(method = "lm", color="black") +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), label.y=108) +
+  geom_text(aes(label=paste('n =', n), y=97), 
+            data=filter(sre.wj.corr.labels, source=="LMB"),
+            x=5, y=98, vjust=0, hjust=0) +
+  coord_cartesian(ylim=c(0, 120)) +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12),
+        legend.position = "none",
+        strip.text = element_text(colour = 'black'),
+        strip.background = element_rect(fill="gray85"))
+
+school.sre.wj.corr.plot
+stanford.sre.wj.corr.plot
+```
+
+```{r}
+df.wj.lwid.plot <- df.corr.plot %>% 
+  filter(!is.na(pdeRaw))
+
+ggplot(df.corr.plot, mapping = aes(x = sreScore,
+                     y = pdeRaw)) + 
+  geom_point() + 
+  labs(x = "SRE-Fixed score (correct - incorrect)",
+       y = "WJ SRF score (correct - incorrect)") +
+  geom_smooth(method = "lm", color="black") +
+  stat_cor(cor.coef.name = 'r', color = "black", 
+           geom = "label", hjust = -0.3, vjust = 1) +
+  scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12),
+        strip.text = element_text(colour = 'black'),
+        strip.background = element_rect(fill="gray85"),
+        aspect.ratio=1)
+```
+
+```{r}
+sre.wj.int.plot <- ggplot(df.sre.srf.int %>% 
+                            filter(interval != 0), mapping = aes(x = interval,
+                     y = oneThreeCorr)) + 
+  facet_grid(. ~ "Human") +
+  labs(x = "SRE time elapsed (s)",
+       y = "Correlation of SRE-Human & WJ-SRF") +
+  geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMaxAdj), width = 0.5) +
+  geom_smooth(method = "loess", color="gray60", se=F) +
+  geom_point(color="gray21") + 
+  scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,30000), labels=seq(0, 180, by=30)) +
+  scale_y_continuous(limits = c(0.50, 1), breaks=seq(0.50 ,1.0, 0.25)) +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=12),
+        panel.grid.minor.x = element_blank(),
+        strip.text = element_text(colour = 'black'),
+        strip.background = element_rect(fill="gray85"),
+        axis.title = element_text(face="bold"))
+
+sre.wj.int.plot
+```
+
+```{r}
+# # create a ggheatmap
+ggplot(df.melted.corr.matrix, aes(Var1, Var2, fill = value)) +
+  geom_tile(color="white") +
+  scale_fill_gradientn(name = "Pearson Correlation", colours = wes_palette("Zissou1", 100, type = "continuous")) +
+  geom_text(aes(Var1, Var2, label = sprintf("%.2f", value)), color = "black", size = 2.75, family="Avenir") +
+  theme_light() + 
+  theme(axis.text.x = element_text(angle = 45, vjust = 1,  size = 8, hjust = 1, face = "bold")) +
+  theme(axis.text.y = element_text(size = 8, face = "bold")) +
+  theme(axis.title.x = element_blank(),
+        axis.title.y = element_blank(),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.background = element_blank(),
+        legend.title=element_text(size=9, face = "bold"),
+        legend.text=element_text(size=5, face = "bold"),
+        legend.direction = "horizontal",
+        legend.position = "bottom",
+        text=element_text(family="Avenir", size=12)) +
+  guides(fill = guide_colorbar(barwidth = 5, barheight = .8,
+                             title.position = "top", title.hjust = 0.5)) +
+  coord_fixed()
+```
+
+### Arranging the plots for ggsave
+```{r}
+combined.plots <- grid.arrange(school.sre.wj.corr.plot, stanford.sre.wj.corr.plot, sre.wj.int.plot, nrow=1)
+```
+
+## Saving out plots
+```{r}
+ggsave('figures/Study 4 Combined Plots.png', combined.plots, dpi=300, height = 3, width = 7.5)
+ggsave('~/Downloads/school-human-wj-corr.png', school.sre.wj.corr.plot, dpi=300, height = 4, width = 4)
+ggsave('~/Downloads/lab-human-wj-corr.png', stanford.sre.wj.corr.plot, dpi=300, height = 4, width = 4)
+ggsave('~/Downloads/lab-human-wj-int.png', sre.wj.int.plot, dpi=300, height = 4, width = 4)
+```
+

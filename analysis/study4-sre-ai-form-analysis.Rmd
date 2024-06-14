@@ -89,6 +89,13 @@ df.valid.runs.selected <- df.runs.selected %>%
   filter(!runId %in% df.invalid.runs$runId) 
 ```
 
+```{r}
+df.school.demo <- df.valid.runs.selected %>%
+  mutate(schoolPrefix = str_extract(user.assessmentPid, "(?<=-)[^-]+")) %>%
+  select(schoolPrefix) %>%
+  unique()
+```
+
 creating data frame for block timing based off valid trials
 ```{r}
 df.valid.trials <- df.trials %>%
@@ -232,9 +239,9 @@ df.valid.runs.selected.combined.updated <- df.additional.combined %>%
   dplyr::rename(grade = user.grade, scores.computed.lab.sreScore = lab) %>% 
   mutate(ai_score = ifelse(!is.na(aiV1P1), aiV1P1, aiV1P2)) %>% 
   mutate(form = ifelse(!is.na(aiV1P1),"AI-Form A", "AI-Form B")) %>% 
-  select(user.assessmentPid, runId,  grade,scores.computed.lab.sreScore, ai_score, form) %>% 
+  select(user.assessmentPid, runId,  grade, scores.computed.lab.sreScore, ai_score, form) %>% 
   rbind(df.valid.runs.selected.combined %>% 
-  select(user.assessmentPid, runId,  grade,scores.computed.lab.sreScore, ai_score, form))
+  select(user.assessmentPid, runId,  grade, scores.computed.lab.sreScore, ai_score, form))
 ```
 
 grade distribution
@@ -254,26 +261,40 @@ df.n.values
 ```
 
 ```{r}
-g.sre.ai.compare <- ggplot(df.valid.runs.selected.combined.updated, mapping = aes(y = ai_score,
-                     x = scores.computed.lab.sreScore)) + 
+df.sre.ai1.scores <- df.valid.runs.selected.combined.updated %>%
+  filter(form == "AI-Form A") %>%
+  mutate(difference = scores.computed.lab.sreScore - ai_score)
+
+df.sre.ai2.scores <- df.valid.runs.selected.combined.updated %>%
+  filter(form == "AI-Form B") %>%
+  mutate(difference = scores.computed.lab.sreScore - ai_score)
+
+paste0("this is median difference of a1 forms:", median(df.sre.ai1.scores$difference), " & standard error:", std(df.sre.ai1.scores$difference))
+paste0("this is median difference of a2 forms:", median(df.sre.ai2.scores$difference), " & standard error:", std(df.sre.ai2.scores$difference))
+```
+
+```{r}
+g.sre.ai.compare <- ggplot(df.valid.runs.selected.combined.updated %>%
+                             mutate(plot_grade = ifelse(grade >= 8, 8, grade)), 
+                           mapping = aes(y = ai_score, x = scores.computed.lab.sreScore)) + 
   facet_wrap(~form) +
-  xlim(-30, 130) + 
-  ylim(-30, 130) +
-  labs(x = "SRE-Fixed score", 
+  xlim(-10, 110) + 
+  ylim(-10, 110) +
+  labs(x = "SRE-Human score", 
        y = "SRE-AI score", 
        color = "Grade") + 
   coord_equal() +
-  geom_abline(slope=1,intercept = 0) +
-  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
-  geom_text(aes(label=paste('n =', n)), x=-30, y=110, vjust=0, hjust=0, data=df.n.values) +
-  geom_point(aes(color=grade), alpha = 0.7, size = 1) + 
+  geom_abline(slope=1,intercept = 0, alpha = 0.5) +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), size = 5) +
+  geom_text(aes(label=paste('n =', n)), x=-10, y=94, vjust=0, hjust=0, data=df.n.values, size=5) +
+  geom_point(aes(color=plot_grade), alpha = 0.7, size = 1) + 
   scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) +
   theme_light() +
-  theme(text=element_text(family="Avenir", size=12),
-        axis.title = element_text(face = "bold"),
+  theme(text=element_text(family="Avenir", size=16),
+        axis.title = element_text(face = "bold", size=14),
         legend.title = element_text(face = "bold"),
-        legend.position = c(0.93, 0.3),
-        strip.text = element_text(colour = 'black'),
+        legend.position = "none",
+        strip.text = element_text(colour = 'black', size=14),
         strip.background = element_rect(fill="gray85"))
 
 g.sre.ai.compare
@@ -285,38 +306,43 @@ lab.aiP1.int.plot <- ggplot(df.lab.aiP1.int %>%
                             mapping = aes(x = interval, y = oneThreeCorr)) + 
   facet_grid(. ~ "AI-Form A") +
   labs(x = "SRE-AI time elapsed (s)",
-       y = "Correlation of SRE-AI and SRE-Fixed") +
+       y = "Correlation of SRE-AI and SRE-Human") +
   geom_text(aes(family=c("Avenir")), label="n = 458", x=135000, y=0.1) +
   geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
   geom_smooth(method = "loess", color="gray60", se=F) +
   geom_point(color="gray21") +
   scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,60000), labels=seq(0, 180, by=60)) +
-  scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.2)) +
+  scale_y_continuous(limits = c(0.4, 1), breaks=seq(0.4,1.0,0.1)) +
   theme_light() +
   theme(text=element_text(family="Avenir", size=14), 
         legend.position = "none",
         axis.title = element_text(face = "bold"),
         strip.text = element_text(colour = 'black'),
-        strip.background = element_rect(fill="gray85"))
+        strip.background = element_rect(fill="gray85"),
+        aspect.ratio = 1)
 
 lab.aiP2.int.plot <- ggplot(df.lab.aiP2.int  %>% 
                               filter(interval != 0),
                             mapping = aes(x = interval, y = oneThreeCorr)) + 
   facet_grid(. ~ "AI-Form B") +
   labs(x = "SRE-AI time elapsed (s)",
-       y = "Correlation of SRE-AI and SRE-Fixed") +
+       y = "Correlation of SRE-AI and SRE-Human") +
   geom_text(aes(family=c("Avenir")), label="n = 436", x=135000, y=0.1) +
   geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMax), width = 0.5) +
   geom_smooth(method = "loess", color="gray60", se=F) +
   geom_point(color="gray21") +
   scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,60000), labels=seq(0, 180, by=60)) +
-  scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0,0.2)) +
+  scale_y_continuous(limits = c(0.4, 1), breaks=seq(0.4,1.0,0.1)) +
   theme_light() +
   theme(text=element_text(family="Avenir", size=14), 
         legend.position = "none",
         axis.title = element_text(face = "bold"),
+        axis.title.y = element_blank(),
+        axis.ticks.y = element_blank(),
+        axis.text.y = element_blank(),
         strip.text = element_text(colour = 'black'),
-        strip.background = element_rect(fill="gray85"))
+        strip.background = element_rect(fill="gray85"), 
+        aspect.ratio = 1)
 
 lab.aiP1.int.plot
 lab.aiP2.int.plot
@@ -332,8 +358,17 @@ lab.ai.int.combined
 ```{r}
 #ggsave('../figures/SRE-AI.pdf', g.sre.ai.compare)
 ggsave('../figures/SRE-AI.png', g.sre.ai.compare, dpi=300, height = 4, width = 7)
-#ggsave('../figures/SRE-AI-Interval.pdf', lab.ai.int.combined)
-ggsave('../figures/SRE-AI-Interval.png', lab.ai.int.combined, dpi=300, height = 4, width = 7)
+ggsave('../figures/SRE-AI-Interval.png', lab.ai.int.combined, dpi = 300, height = 4, width = 7)
+ggsave('../figures/SRE-AI-Interval-P1.png', lab.aiP1.int.plot, dpi=300, height = 5, width = 5)
+ggsave('../figures/SRE-AI-Interval-P2.png', lab.aiP2.int.plot, dpi=300, height = 5, width = 5)
+```
+
+```{r}
+#ggsave('../figures/SRE-AI.pdf', g.sre.ai.compare)
+ggsave('~/Downloads/SRE-AI.png', g.sre.ai.compare, dpi=300, height = 4, width = 7)
+ggsave('~/Downloads/SRE-AI-Interval.png', lab.ai.int.combined, dpi = 300, height = 4, width = 7)
+ggsave('~/Downloads/SRE-AI-Interval-P1.png', lab.aiP1.int.plot, dpi=300, height = 5, width = 5)
+ggsave('~/Downloads/SRE-AI-Interval-P2.png', lab.aiP2.int.plot, dpi=300, height = 5, width = 5)
 ```
 
 ## grade level 

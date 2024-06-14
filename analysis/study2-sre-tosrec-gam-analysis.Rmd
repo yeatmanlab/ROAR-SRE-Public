@@ -11,6 +11,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(patchwork)
 library(tidyr)
 library(dplyr)
+library(stringr)
 library(mgcv)
 library(ggplot2)
 library(ggExtra)
@@ -77,7 +78,9 @@ df.cleaned
 # filtering out guessing participants who have low accuracy and fast reaction times
 df.filtered <- df.cleaned %>%
   filter(((median.rt.lab > 1000 & median.rt.lab < 20000) & pCorr.lab > 0.65) | 
-  ((median.rt.tosrec > 1000 & median.rt.tosrec < 20000) & pCorr.tosrec > 0.65))
+  ((median.rt.tosrec > 1000 & median.rt.tosrec < 20000) & pCorr.tosrec > 0.65)) %>%
+  mutate(pidPrefix = str_extract(pid, "[^-]+")) %>%
+  mutate(group = ifelse(grepl("brs|wsd|kex", pid), "Public", "Dyslexia"))
 
 df.filtered.upper <- df.cleaned.include.upper %>%
   filter(((median.rt.lab > 1000 & median.rt.lab < 20000) & pCorr.lab > 0.65) | 
@@ -127,7 +130,7 @@ lab.rt.pcorr.plot <- ggplot(df.cleaned, aes(x = pCorr.lab, y = median.rt.lab, co
   theme(text=element_text(family="Avenir", size=14), 
         axis.title = element_text(face = "bold"),
         legend.title = element_text(face = "bold"), 
-        legend.position = "bottom", 
+        legend.position = "none", 
         aspect.ratio=1) 
 
 tosrec.rt.pcorr.plot <- ggplot(df.cleaned, aes(x = pCorr.tosrec, y = median.rt.tosrec, color=tosrec.grade.response)) +
@@ -147,7 +150,7 @@ tosrec.rt.pcorr.plot <- ggplot(df.cleaned, aes(x = pCorr.tosrec, y = median.rt.t
   theme(text=element_text(family="Avenir", size=14), 
         axis.title = element_text(face = "bold"),
         legend.title = element_text(face = "bold"), 
-        legend.position = "bottom", 
+        legend.position = "none", 
         aspect.ratio=1) 
 
 lab.rt.pcorr.marg.plot <- ggMarginal(lab.rt.pcorr.plot, type="histogram")
@@ -156,6 +159,26 @@ tosrec.rt.pcorr.marg.plot <- ggMarginal(tosrec.rt.pcorr.plot, type="histogram")
 # viewing the plots
 lab.rt.pcorr.marg.plot
 tosrec.rt.pcorr.marg.plot
+```
+
+Figure: Inspecting SRE-Fixed score vs. TOSREC score (Public vs. Dyslexia)
+```{r SRE-GAM-LOESS-Plot}
+school.compare.plot <- ggplot(df.filtered, aes(y = lab.raw.score, x = tosrec.raw.score, color=tosrec.grade.response)) +
+  facet_wrap(~group) +
+  geom_point(alpha=0.50) +
+  geom_abline(slope=1,intercept = 0) +
+  stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
+  labs(x = "ROAR-SRE score (correct - incorrect)",
+       y = "TOSREC score (correct - incorrect)") +
+  theme_light() +
+  theme(text=element_text(family="Avenir", size=14), 
+        legend.position = "none",
+        axis.title = element_text(face = "bold"),
+        strip.text = element_text(colour = 'black'),
+        strip.background = element_rect(fill="gray85"),
+        aspect.ratio=1)
+
+school.compare.plot
 ```
 
 Figure: Inspecting SRE-Fixed score vs. TOSREC score for grades 9-12
@@ -203,6 +226,13 @@ ggplot(df.grade.dist, aes(x=tosrec.grade.response)) +
   theme_light() +
   theme(text=element_text(family="Avenir", size=12)) 
 ```
+### Demographics distribution of schools ###
+```{r}
+df.school.demo <- df.filtered %>%
+  mutate(schoolPrefix = str_extract(pid, "^[^-]+")) %>%
+  select(schoolPrefix) %>%
+  unique()
+```
 
 ### Assigning GAM model data to final variable for easy de-bugging
 ```{r}
@@ -245,8 +275,8 @@ Figure 5: Inspecting predicted TOSREC standard score vs. equivalent TOSREC stand
 ```{r SRE-GAM-LOESS-Plot}
 # Plot GAM prediction
 gam.pred.plot = ggplot(df.final, aes(y = predicted.tosrec.gam, x = equivalent.tosrec.ss, color=tosrec.grade.response)) +
+  geom_abline(slope=1,intercept = 0,alpha = 0.5) +
   geom_point(alpha=0.50) +
-  geom_abline(slope=1,intercept = 0) +
   facet_wrap(~tosrec.grade.response, nrow=2, labeller = labeller(tosrec.grade.response = c("1"="1st grade", "2"="2nd grade", "3"="3rd grade", "4"="4th grade", "5"="5th grade", "6"="6th grade", "7"="7th grade", "8"="8th grade"))) + 
   stat_cor(cor.coef.name = 'r', aes(label = ..r.label..)) +
   geom_text(aes(label=paste('n =', n)), x=50, y=125, vjust=0, hjust=0, data=grade.labels) +
@@ -326,7 +356,7 @@ ggplot(X, aes(x=lab.raw.score, y=equivalent.tosrec.ss.loess, group=tosrec.grade.
 # Run this chunk to save the plots 
 ```{r}
 ggsave('figures/SRE-TOSREC (GAM).png', gam.pred.plot, dpi=300)
-#ggsave('figures/SRE-TOSREC (Loess).png', loess.pred.plot, dpi=300)
+ggsave('figures/SRE-TOSREC (Loess).png', loess.pred.plot, dpi=300)
 ggsave('figures/SRE-pCorr-RT.png', lab.rt.pcorr.marg.plot, dpi=300)
 ggsave('figures/TOSREC-pCorr-RT.png', tosrec.rt.pcorr.marg.plot, dpi=300)
 ```
