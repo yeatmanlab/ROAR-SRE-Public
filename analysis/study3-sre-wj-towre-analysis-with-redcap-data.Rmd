@@ -57,15 +57,15 @@ get_upper_tri = function(cormat) {
 ## Data Loading (other Stanford participants)
 ```{r}
 # data from study 1 (Stanford participants)
-df.legacy.sre.raw <- read.csv("~/Documents/roar-analysis/data/prod_legacy_sre_raw_trials.csv")
+df.legacy.sre.raw <- read.csv("~/Documents/roar-data/sre-manuscript-submission/prod_legacy_sre_raw_trials.csv")
 
-df.va.wj.raw <- read.csv("~/Documents/roar-analysis/data/visualAttentionSRFValidationData.csv") %>%
+df.va.wj.raw <- read.csv("~/Documents/roar-data/sre-manuscript-submission/visualAttentionSRFValidationData.csv") %>%
   mutate(mffScore = NA) %>%
   select(pid, "years" = visit_age_yrs, "grade" = visit_grade, 
          "srfCorrect" = wj_srf_correct_raw, "srfIncorrect" = wj_srf_incorrect_raw,
          mffScore)
 
-df.stanford.wj.raw <- read.csv("~/Documents/roar-analysis/data/lmb_F1_C3_wj_srf_data.csv") %>%
+df.stanford.wj.raw <- read.csv("~/Documents/roar-data/sre-manuscript-submission/lmb_F1_C3_wj_srf_data.csv") %>%
   select(-redcapId) %>%
   rbind(df.va.wj.raw)
 ```
@@ -73,8 +73,8 @@ df.stanford.wj.raw <- read.csv("~/Documents/roar-analysis/data/lmb_F1_C3_wj_srf_
 ## Data Loading (BRSSD participants)
 ```{r}
 # data from study 2 (brssd validation)
-df.brs.sre.raw <- read.csv("~/Documents/roar-analysis/data/brs_sre_data_trials_fall_23.csv")
-df.brs.wj.raw <- read.csv("~/Documents/roar-analysis/data/brs_fall_23_validation_data.csv")
+df.brs.sre.raw <- read.csv("~/Documents/roar-data/sre-manuscript-submission/brs_sre_data_trials_fall_23.csv")
+df.brs.wj.raw <- read.csv("~/Documents/roar-data/sre-manuscript-submission/brs_fall_23_validation_data.csv")
 ```
 
 ## Data Cleaning & Wrangling
@@ -380,13 +380,13 @@ school.sre.wj.corr.plot <- ggplot(df.corr.plot %>%
                                   mapping = aes(x = sreScore, y = srfScore)) + 
   geom_point(color="#d66f8f") + 
   facet_grid(. ~ "3rd grade public school") +
-  labs(x = "SRE-Human score",
+  labs(x = "SRE-Fixed score",
        y = "WJ-SRF score") +
   geom_smooth(method = "lm", color="black") +
   stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), label.y=108, color="black") +
   geom_text(aes(label=paste('n =', n)), 
             data=filter(sre.wj.corr.labels, source=="BRSSD"),
-            x=5, y=98, vjust=0, hjust=0) +
+            x=5, y=96, vjust=0, hjust=0) +
   coord_cartesian(ylim=c(0, 120)) +
   theme_light() +
   theme(text=element_text(family="Avenir", size=12),
@@ -395,17 +395,18 @@ school.sre.wj.corr.plot <- ggplot(df.corr.plot %>%
         strip.background = element_rect(fill="gray85"))
 
 stanford.sre.wj.corr.plot <- ggplot(df.corr.plot %>%
-                                 filter(source == "LMB"), 
+                                 filter(source == "LMB") %>%
+                                 mutate(grade = ifelse(grade > 8, 8, grade)),
                                  mapping = aes(x = sreScore, y = srfScore)) + 
   geom_point(aes(color = grade)) + 
   facet_grid(. ~ "Dyslexia study") +
-  labs(x = "SRE-Human score",
+  labs(x = "SRE-Fixed score",
        y = "WJ-SRF score") +
   geom_smooth(method = "lm", color="black") +
   stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), label.y=108) +
   geom_text(aes(label=paste('n =', n), y=97), 
             data=filter(sre.wj.corr.labels, source=="LMB"),
-            x=5, y=98, vjust=0, hjust=0) +
+            x=5, y=96, vjust=0, hjust=0) +
   coord_cartesian(ylim=c(0, 120)) +
   scale_color_gradientn(colours = c( 'dodgerblue1','firebrick1','goldenrod1')) +
   theme_light() +
@@ -442,9 +443,8 @@ ggplot(df.corr.plot, mapping = aes(x = sreScore,
 sre.wj.int.plot <- ggplot(df.sre.srf.int %>% 
                             filter(interval != 0), mapping = aes(x = interval,
                      y = oneThreeCorr)) + 
-  facet_grid(. ~ "Human") +
   labs(x = "SRE time elapsed (s)",
-       y = "Correlation of SRE-Human & WJ-SRF") +
+       y = "Correlation of SRE & WJ-SRF") +
   geom_errorbar(aes(ymin = errorBarsMin, ymax = errorBarsMaxAdj), width = 0.5) +
   geom_smooth(method = "loess", color="gray60", se=F) +
   geom_point(color="gray21") + 
@@ -454,8 +454,7 @@ sre.wj.int.plot <- ggplot(df.sre.srf.int %>%
   theme(text=element_text(family="Avenir", size=12),
         panel.grid.minor.x = element_blank(),
         strip.text = element_text(colour = 'black'),
-        strip.background = element_rect(fill="gray85"),
-        axis.title = element_text(face="bold"))
+        strip.background = element_rect(fill="gray85"))
 
 sre.wj.int.plot
 ```
