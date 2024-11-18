@@ -16,6 +16,7 @@ Let's first load the packages that we need for this chapter.
 
 ```{r, message=FALSE, warning = FALSE, echo = FALSE}
 library(MatchIt)
+library(quanteda.textstats)
 library(knitr)
 library(stringr)
 library(ggpubr)
@@ -215,6 +216,7 @@ df.age.stats <- df.filtered.participants %>%
   left_join(df.renamed, by="subj") %>%
   left_join(df.lab.stats, by="subj") %>%
   left_join(df.tosrec.stats, by="subj") %>%
+  mutate(group = ifelse((group == "Stanford" | group == "UW"), "University", group)) %>%
   group_by(group) %>%
   summarise(min_age = min(age, na.rm = TRUE), 
             max_age = max(age, na.rm = TRUE),
@@ -303,7 +305,7 @@ df.lab.items.filtered.v1 <- df.lab.items.unfiltered %>%
 Figure 1: Filtering items based on proportion correct & inspecting average reaction time (RT)
 ```{r}
 df.filtered.plot <- df.lab.items.filtered.v1 %>%
-  mutate(Filtered = ifelse(pCorr > 0.85, "True", "False"))
+  mutate(Filtered = ifelse(pCorr > 0.85, "Yes", "No"))
 
 filtered.plot <- ggplot(data = df.filtered.plot, label = sentence, aes(label = sentence)) + 
   geom_point(data = df.filtered.plot, mapping = aes(x = avgRT,
@@ -312,23 +314,26 @@ filtered.plot <- ggplot(data = df.filtered.plot, label = sentence, aes(label = s
   scale_x_continuous("Average response time (s)") +
   scale_y_continuous("Agreement rate (proportion correct)") +
   geom_hline(yintercept = 0.85, color = "#F8766D", linetype = "dashed", linewidth = 0.75) +
-  geom_label_repel(data = df.filtered.plot %>% 
-                     filter(sentenceId == "lab_40" | sentenceId == "lab_0"
-                            | sentenceId == "lab_23" | sentenceId == "lab_43"),
-                   aes(avgRT, pCorr, label=sentence),
-                   nudge_x = 0.05, nudge_y = -0.03,
-                   fill = "gray95", family="Avenir", size = 2.5) +
+  # #geom_label_repel(data = df.filtered.plot %>% 
+  #                    filter(sentenceId == "lab_40" | sentenceId == "lab_0"
+  #                           | sentenceId == "lab_23" | sentenceId == "lab_43"),
+  #                  aes(avgRT, pCorr, label=sentence),
+  #                  nudge_x = 0.05, nudge_y = -0.03,
+  #                  fill = "gray95", family="Avenir", size = 2.5) +
   guides(color = guide_legend(reverse = TRUE)) +
   theme_light() +
   theme(text=element_text(family="Avenir", size=12), 
         axis.title = element_text(face = "bold"),
-        legend.position = c(0.18, 0.2),
-        legend.background = element_rect(fill="gray95", linewidth = 0.5, linetype ="solid", colour ="gray80"))
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=9),
+        legend.position = c(0.75, 0.15),
+        legend.background = element_rect(fill="gray95", linewidth = 0.5, linetype ="solid", colour ="gray80"),
+        aspect.ratio = 1)
 ```
 
 ```{r}
-#ggplotly(filtered.plot)
-filtered.plot
+ggplotly(filtered.plot)
+#filtered.plot
 ```
 
 ```{r, include = FALSE}
@@ -354,12 +359,18 @@ quad.plot <- ggplot(data = df.quad.plot, label = sentence, aes(label = sentence)
                    aes(avgRTStd, pCorrStd, label=sentence),
                    nudge_x = 0.3, nudge_y = -0.5,
                    fill = "gray95", family="Avenir", size = 2.5) +
-  scale_x_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)), "Average response time (s)") +
-  scale_y_continuous(limits = c(-3, 3), breaks = round(seq(-3,3)),"Average agreement rate") +
+  scale_x_continuous(limits = c(-2.5, 2.5), breaks = round(seq(-2.5, 2.5)), "Standardized average response time (s)") +
+  scale_y_continuous(limits = c(-2, 2), breaks = round(seq(-2, 2)),"Standardized average agreement rate") +
   scale_color_viridis(option = 'viridis') +
   theme_light() +
   theme(text=element_text(family="Avenir", size=12),
-        axis.title = element_text(face = "bold"),) 
+        axis.title = element_text(face = "bold"),
+        legend.title=element_text(size=10),
+        legend.text=element_text(size=9),
+        legend.position = c(0.4, 0.15),
+        legend.direction = "horizontal",
+        legend.background = element_rect(fill="gray95", linewidth = 0.5, linetype ="solid", colour ="gray80"),
+        aspect.ratio = 1) 
 ```
 
 ```{r}
@@ -379,10 +390,13 @@ df.scatter.plot <- df.sre.tosrec.scores
 
 pilot.fixed.scatter <- ggplot(df.scatter.plot, mapping = aes(x = labFinalScore, y = tosrecFinalScore)) + 
   geom_point(size = 1.5, color = "gray20") +
-  geom_smooth(method = "lm", color="black") +
+  geom_abline(slope=1,intercept = 0, size=0.5, alpha = 0.5) +
+  geom_smooth(method = "lm") +
   facet_wrap(~~fct_rev(labCorpus)) +
   stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), color = "black", 
            geom = "label", hjust = -0.3, vjust = 1) +
+  scale_x_continuous(limits = c(0, 115)) +
+  scale_y_continuous(limits = c(0, 115)) +
   labs(x = "SRE score (correct - incorrect)",
        y = "TOSREC score (correct - incorrect)",
        color = "SRE Form") + 
@@ -391,7 +405,7 @@ pilot.fixed.scatter <- ggplot(df.scatter.plot, mapping = aes(x = labFinalScore, 
         axis.title = element_text(face = "bold"),
         strip.text = element_text(colour = 'black'), 
         strip.background = element_rect(fill="gray85"),
-        aspect.ratio = 5/4)
+        aspect.ratio = 1)
 
 pilot.fixed.scatter
 ```
@@ -527,6 +541,18 @@ df.lab.items.final <- df.lab.items.easy.final %>%
   rbind(df.lab.items.hard.final) 
 ```
 
+### Calculating readability indexes
+```{r}
+df.readability.scores <- df.lab.items.final %>% 
+  select(sentenceId, sentence) %>%
+  mutate(fleschKincaid = textstat_readability(sentence, measure = "Flesch.Kincaid"),
+         fleschReadingEase = textstat_readability(sentence, measure = "Flesch")) %>%
+  select(sentenceId, sentence, fleschKincaid, fleschReadingEase)
+
+print(paste0("mean: ", mean(df.readability.scores$fleschKincaid$Flesch.Kincaid)))
+print(paste0("sd: ",  sd(df.readability.scores$fleschKincaid$Flesch.Kincaid)))
+```
+
 ```{r}
 df.lab.items.final
 ```
@@ -556,7 +582,7 @@ hard.final <- df.lab.items.hard.final[hard.length,] %>%
 
 # Run this chunk to save the plots 
 ```{r}
-ggsave('figures/SRE-Pilot-PCorr-RT-Scatter.png', filtered.plot, height = 4, width = 7, dpi=300)
-ggsave('figures/SRE-Pilot-Quad-Scatter.png', quad.plot, height = 4, width = 7, dpi=300)
-ggsave('figures/SRE-Fixed-Pilot-Scatter.png', pilot.fixed.scatter, dpi=300)
+ggsave('figures/SRE-Pilot-PCorr-RT-Scatter.png', filtered.plot, height = 4, width = 4, dpi=300)
+ggsave('figures/SRE-Pilot-Quad-Scatter.png', quad.plot, height = 4, width = 4, dpi=300)
+ggsave('figures/SRE-Fixed-Pilot-Scatter.png', pilot.fixed.scatter, height = 7, width = 7, dpi=300)
 ```

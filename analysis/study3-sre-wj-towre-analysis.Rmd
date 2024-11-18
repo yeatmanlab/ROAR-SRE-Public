@@ -153,6 +153,13 @@ df.brs.sre.runs <- df.brs.sre.cleaned %>%
 df.combined.sre.runs <- rbind(df.brs.sre.runs, df.lmb.sre.runs)
 ```
 
+```{r}
+df.school.demo <- df.combined.sre.runs %>%
+  mutate(schoolPrefix = str_extract(pid, "(?<=-)[^-]+")) %>%
+  select(schoolPrefix) %>%
+  unique()
+```
+
 ## Processing combined dataframe for timing analysis
 ```{r}
 df.init.time <- df.combined.sre.runs %>% 
@@ -193,6 +200,32 @@ full.int.df <- df.block.time %>%
   tally() %>% 
   select(-n) %>%
   merge(intervals.ref, all = TRUE)
+```
+
+```{r}
+df.aiP1.scores <- df.block.time %>%
+  select(pid, runId, blockId, correct_new, time_elapsed) %>%
+  filter(blockId == "aiV1P1") %>%
+  group_by(pid, runId, blockId) %>%
+  reframe(aiP1Score = cumsum(correct_new),
+          time_elapsed = time_elapsed) %>%
+  group_by(pid, runId, blockId) %>%
+  slice_max(time_elapsed) %>%
+  ungroup() %>%
+  select(pid, aiP1Score)
+```
+
+```{r}
+df.aiP2.scores <- df.block.time %>%
+  select(pid, runId, blockId, correct_new, time_elapsed) %>%
+  filter(blockId == "aiV1P2") %>%
+  group_by(pid, runId, blockId) %>%
+  reframe(aiP2Score = cumsum(correct_new),
+          time_elapsed = time_elapsed) %>%
+  group_by(pid, runId, blockId) %>%
+  slice_max(time_elapsed) %>%
+  ungroup() %>%
+  select(pid, aiP2Score)
 ```
 
 ## Augmenting data for SRE form into 10 Second Intervals
@@ -290,6 +323,8 @@ df.corr.plot <- df.sre.validation.analysis %>%
 
 ```{r}
 df.corr.matrix <- df.corr.plot %>%
+  left_join(df.aiP1.scores, by="pid") %>%
+  left_join(df.aiP2.scores, by="pid") %>%
   select(-c(pid, age, grade, source)) 
 
 # compute correlations
@@ -342,10 +377,10 @@ school.sre.wj.corr.plot <- ggplot(df.corr.plot %>%
   stat_cor(cor.coef.name = 'r', aes(label = ..r.label..), color="black") +
   geom_text(aes(label=paste('n =', n)), 
             data=filter(sre.wj.corr.labels, source=="BRSSD"),
-            x=5, y=68, vjust=0, hjust=0) +
+            x=5, y=75, vjust=0, hjust=0) +
   scale_color_gradientn(colours = c('dodgerblue1','firebrick1','goldenrod1')) +
   theme_light() +
-  theme(text=element_text(family="Avenir", size=12),
+  theme(text=element_text(family="Avenir", size=12, face="bold"),
         legend.position = "none",
         strip.text = element_text(colour = 'black'),
         strip.background = element_rect(fill="gray85"))
@@ -403,7 +438,7 @@ sre.wj.int.plot <- ggplot(df.sre.srf.int %>%
   geom_smooth(method = "loess", color="gray60", se=F) +
   geom_point(color="gray21") + 
   scale_x_continuous(limits=c(0,180000), breaks=seq(0,180000,30000), labels=seq(0, 180, by=30)) +
-  scale_y_continuous(limits = c(0, 1), breaks=seq(0,1.0, 0.25)) +
+  scale_y_continuous(limits = c(0.50, 1), breaks=seq(0.50 ,1.0, 0.25)) +
   theme_light() +
   theme(text=element_text(family="Avenir", size=12),
         panel.grid.minor.x = element_blank())
